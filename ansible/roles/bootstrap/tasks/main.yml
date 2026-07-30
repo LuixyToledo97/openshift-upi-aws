@@ -1,0 +1,123 @@
+---
+# bootstrap: creates what Terraform and the rest of the roles assume
+# already exists (working IAM user, public hosted zone, local SSH key).
+# Unlike preflight, THIS role does write to AWS and to local disk — that's
+# why ocplab asks for confirmation before running it.
+#
+# Every task first checks whether what it's about to create already
+# exists (by name, not by ID) before touching anything — safe to run
+# multiple times.
+
+# 'always' on the bookkeeping tasks below: 'ocplab bootstrap --tags <x>'
+# (e.g. --tags route53, to test/run just one concern in isolation — the
+# CLI's --tags flag already existed, nothing in this role used to define
+# tags for it to select) would otherwise skip these too, since Ansible
+# only auto-runs 'always'-tagged tasks when --tags filters everything
+# else out.
+- name: Initialize the problem list
+  ansible.builtin.set_fact:
+    bootstrap_problems: []
+  tags: always
+
+# Only 'destroy' needs this (route53.yml renders a JSON change-batch to
+# clean up stray records before deleting the zone) — same
+# templated-JSON-file + raw-CLI pattern already used in safety_net, for
+# the same reason (avoids mixing YAML/Jinja/JSON quoting on one line).
+- name: Temporary directory for JSON payloads
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: ocplab-bootstrap-
+  register: bootstrap_tmp_dir
+  when: ocplab_bootstrap_action == 'destroy'
+  check_mode: false
+  tags: always
+
+# Order matters for 'destroy' (safest/most-reversible first: local SSH
+# key, then the hosted zone, then — only if --delete-iam-user — the IAM
+# user last, since it's the most protected resource). Doesn't matter for
+# apply/status, kept in the same order as before for those.
+- name: "apply: create/ensure"
+  when: ocplab_bootstrap_action == 'apply'
+  block:
+    - ansible.builtin.import_tasks: iam.yml
+      tags: iam
+    - ansible.builtin.import_tasks: route53.yml
+      tags: route53
+    - ansible.builtin.import_tasks: ssh_key.yml
+      tags: ssh_key
+
+- name: "status: report without touching anything"
+  when: ocplab_bootstrap_action == 'status'
+  block:
+    - ansible.builtin.import_tasks: iam.yml
+      tags: iam
+    - ansible.builtin.import_tasks: route53.yml
+      tags: route53
+    - ansible.builtin.import_tasks: ssh_key.yml
+      tags: ssh_key
+
+- name: "destroy: tear down (safest first)"
+  when: ocplab_bootstrap_action == 'destroy'
+  block:
+    - ansible.builtin.import_tasks: ssh_key.yml
+      tags: ssh_key
+    - ansible.builtin.import_tasks: route53.yml
+      tags: route53
+    - ansible.builtin.import_tasks: iam.yml
+      tags: iam
+
+- name: Clean up the temporary directory
+  ansible.builtin.file:
+    path: "{{ bootstrap_tmp_dir.path }}"
+    state: absent
+  when: bootstrap_tmp_dir is defined and bootstrap_tmp_dir.path is defined
+  check_mode: false
+  tags: always
+
+- name: Show the problems found
+  ansible.builtin.debug:
+    msg: "{{ bootstrap_problems }}"
+  when: bootstrap_problems | length > 0
+  tags: always
+
+# Shown last, unconditionally (before the pass/fail assert below, not
+# after — an assert failure would otherwise abort the play and this would
+# never print) — this is the one thing the user actually has to go DO
+# next, so it needs to survive being the last thing on screen, not get
+# buried between the IAM and SSH-key task output above.
+- name: "apply: NS delegation notice — ACTION REQUIRED"
+  vars:
+    # Plain spaces, not '\t' — found the hard way: Ansible's default
+    # callback doesn't render tab escapes as real tabs in a debug msg
+    # list, it shows the literal two characters '\t', which read as a
+    # confusing '.\' right after the domain's trailing dot.
+    bootstrap_ns_table: "{{ bootstrap_zone_summary.nameservers | map('regex_replace', '^', ocplab_base_domain + '.  NS  ') | list }}"
+  ansible.builtin.debug:
+    msg: >-
+      {{
+        ['', '=' * 70,
+         '⚠️  ACTION REQUIRED before running ocplab preflight/deploy',
+         '=' * 70, '',
+         'Delegate ' + ocplab_base_domain + ' at your registrar with exactly these 4 NS records:',
+         ''] + bootstrap_ns_table + ['',
+         (('Zone ID ' + bootstrap_zone_summary.zone_id + ' matches cluster.yaml.')
+          if bootstrap_zone_summary.matches_cluster_yaml
+          else ('Zone ID changed — update cluster.yaml: platform.aws.publicHostedZoneId: ' + bootstrap_zone_summary.zone_id)),
+         '',
+         'Then wait for propagation (minutes to ~1h) before continuing.',
+         '=' * 70, '']
+      }}
+  when:
+    - ocplab_bootstrap_action == 'apply'
+    - bootstrap_zone_summary is defined
+
+- name: Bootstrap passed
+  ansible.builtin.assert:
+    that: bootstrap_problems | length == 0
+    fail_msg: >-
+      {{ bootstrap_problems | length }} problem(s) during bootstrap —
+      check the list above.
+    success_msg: >-
+      bootstrap {{ ocplab_bootstrap_action }}: done.
+      {{ "Run 'ocplab preflight' to confirm it." if ocplab_bootstrap_action == 'apply' else "" }}
+  tags: always

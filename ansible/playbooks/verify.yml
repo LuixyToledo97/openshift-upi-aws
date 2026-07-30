@@ -1,0 +1,6 @@
+---
+- name: ocplab verify — check the health of the deployed cluster
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - verify

@@ -1,0 +1,23 @@
+---
+# Binaries that must be on the PATH before touching AWS. Their exact
+# versions can be pinned separately (see preflight_min_terraform_version)
+# because each one exposes its version differently (terraform, aws,
+# openshift-install, oc).
+preflight_required_binaries:
+  - terraform
+  - aws
+  - openshift-install
+  - oc
+
+# Must match "required_version" in terraform/versions.tf — if one is
+# updated, update the other too.
+preflight_min_terraform_version: "1.7.0"
+
+# Registries that a real pull secret from console.redhat.com includes (see
+# templates/install-config.yaml). If any is missing, pulling images during
+# deployment fails halfway through the install, not at the start.
+preflight_required_pull_secret_registries:
+  - cloud.openshift.com
+  - quay.io
+  - registry.redhat.io
+  - registry.connect.redhat.com

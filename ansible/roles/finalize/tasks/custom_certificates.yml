@@ -1,0 +1,250 @@
+---
+# Applies a hand-provided real CA-signed cert/key pair, if cluster.yaml's
+# certificates.* fields are set. Gated on EXPLICIT declaration in
+# cluster.yaml, not merely on files existing at some path — found the hard
+# way: an earlier version of 'resolve_cert_paths()' (in ocplab) defaulted
+# unset fields to ~/.ocplab/certs/<name>-*, and leftover cert files from
+# the (now-removed) self-signed generator sitting at that exact default
+# path got silently re-applied by a later deploy, even though cluster.yaml
+# never declared them. Undeclared fields now render as empty strings in
+# generated.yml, so "not configured" is checked independently of "file
+# exists" below.
+#
+# Always a POST-install step (never part of install-config.yaml, which has
+# no cert fields at all) — that's why this runs after wait-for
+# install-complete, not before.
+
+- name: Determine whether custom certs are actually declared in cluster.yaml
+  ansible.builtin.set_fact:
+    finalize_api_cert_configured: "{{ (ocplab_api_cert_file | length > 0) and (ocplab_api_key_file | length > 0) }}"
+    finalize_apps_cert_configured: "{{ (ocplab_apps_cert_file | length > 0) and (ocplab_apps_key_file | length > 0) }}"
+
+- name: Check whether the API cert/key pair exists
+  ansible.builtin.stat:
+    path: "{{ item | expanduser }}"
+  loop:
+    - "{{ ocplab_api_cert_file }}"
+    - "{{ ocplab_api_key_file }}"
+  register: finalize_api_cert_stat
+  when: finalize_api_cert_configured
+
+- name: Check whether the apps cert/key pair exists
+  ansible.builtin.stat:
+    path: "{{ item | expanduser }}"
+  loop:
+    - "{{ ocplab_apps_cert_file }}"
+    - "{{ ocplab_apps_key_file }}"
+  register: finalize_apps_cert_stat
+  when: finalize_apps_cert_configured
+
+# Short-circuiting 'and' matters here: when *_configured is false, the stat
+# task above was skipped (no '.results'), and the right-hand side is never
+# evaluated — so this stays safe without an extra empty-list guard.
+- name: Determine whether each custom cert pair is declared AND present on disk
+  ansible.builtin.set_fact:
+    finalize_api_cert_present: "{{ finalize_api_cert_configured and (finalize_api_cert_stat.results | map(attribute='stat.exists') | list is all) }}"
+    finalize_apps_cert_present: "{{ finalize_apps_cert_configured and (finalize_apps_cert_stat.results | map(attribute='stat.exists') | list is all) }}"
+
+- name: "Custom API cert: configure it on the cluster"
+  when: finalize_api_cert_present
+  block:
+    - name: Create/update the API cert Secret in openshift-config
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: "{{ ocplab_cluster_name }}-api-tls"
+            namespace: openshift-config
+          # '+ "\n"' is not decoration — lookup('file', ...) strips the
+          # file's trailing newline. Found the hard way: OpenShift's own
+          # authentication-operator concatenates a router-cert Secret's
+          # tls.crt + tls.key byte-for-byte with no separator of its own
+          # to build v4-0-config-system-router-certs, so a missing
+          # newline here glues "-----END CERTIFICATE----------BEGIN
+          # PRIVATE KEY-----" into one unparseable line — the oauth-openshift
+          # pods crash-looped on "failed to find any PEM data" from
+          # exactly this, on the real cluster, before this fix existed.
+          stringData:
+            tls.crt: "{{ lookup('file', ocplab_api_cert_file | expanduser) }}\n"
+            tls.key: "{{ lookup('file', ocplab_api_key_file | expanduser) }}\n"
+
+    - name: Point the APIServer at the custom cert for api.{{ ocplab_cluster_name }}.{{ ocplab_base_domain }}
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: config.openshift.io/v1
+          kind: APIServer
+          metadata:
+            name: cluster
+          spec:
+            servingCerts:
+              namedCertificates:
+                - names:
+                    - "api.{{ ocplab_cluster_name }}.{{ ocplab_base_domain }}"
+                  servingCertificate:
+                    name: "{{ ocplab_cluster_name }}-api-tls"
+
+# A self-signed API cert breaks 'oc'/kubectl through install-dir's own
+# kubeconfig — found for real: kubeconfig's certificate-authority-data is
+# whatever CA the installer generated, so once the API server actually
+# starts serving our cert (SNI-matched on api.<cluster>.<domain>, confirmed
+# with 'openssl s_client -servername ...'), every kubeconfig-based client
+# — including 'oc adm certificate approve' inside THIS SAME finalize role —
+# starts failing with "x509: certificate signed by unknown authority". It
+# was worse than a clean failure: kube-apiserver rolling out the new
+# servingCerts config across the 3 masters made it flaky/intermittent
+# (whichever master the LB picked), not a clean all-or-nothing break,
+# which is what made it confusing to diagnose live. Fixed by appending
+# (never replacing — the original CA is still needed) our self-signed
+# cert's own PEM to the kubeconfig's CA bundle, so both are trusted.
+- name: "Custom API cert: merge its CA into install-dir's kubeconfig, so 'oc'/kubectl trust it too"
+  when: finalize_api_cert_present
+  block:
+    - name: Read and parse the current kubeconfig
+      ansible.builtin.set_fact:
+        finalize_kubeconfig_data: "{{ lookup('file', ocplab_kubeconfig) | from_yaml }}"
+
+    - name: Decode the kubeconfig's existing CA bundle and read our cert's PEM
+      ansible.builtin.set_fact:
+        finalize_existing_ca: "{{ finalize_kubeconfig_data.clusters[0].cluster['certificate-authority-data'] | b64decode }}"
+        finalize_api_cert_pem: "{{ lookup('file', ocplab_api_cert_file | expanduser) }}"
+
+    - name: Merge our CA in and write the kubeconfig back, only if not already merged
+      when: finalize_api_cert_pem not in finalize_existing_ca
+      vars:
+        # Explicit '\n' join — never assume the existing CA data already
+        # ends in a newline. Two PEM blocks glued together without one
+        # (...END CERTIFICATE----------BEGIN CERTIFICATE...) can fail to
+        # parse; caught this in testing before it ever touched the real
+        # kubeconfig.
+        finalize_updated_cluster: "{{ finalize_kubeconfig_data.clusters[0] | combine({'cluster': {'certificate-authority-data': (finalize_existing_ca + '\n' + finalize_api_cert_pem) | b64encode}}, recursive=True) }}"
+        finalize_updated_kubeconfig: "{{ finalize_kubeconfig_data | combine({'clusters': [finalize_updated_cluster]}) }}"
+      ansible.builtin.copy:
+        content: "{{ finalize_updated_kubeconfig | to_nice_yaml }}"
+        dest: "{{ ocplab_kubeconfig }}"
+        mode: "0600"
+      register: finalize_kubeconfig_updated
+
+    - name: Show the result
+      ansible.builtin.debug:
+        msg: >-
+          {{ ("Merged the custom API cert's CA into " + ocplab_kubeconfig + " — 'oc'/kubectl trust it now too.")
+             if (finalize_kubeconfig_updated.changed | default(false))
+             else "kubeconfig already trusts this CA." }}
+
+- name: "Custom API cert: not declared or not found, skipping"
+  ansible.builtin.debug:
+    msg: >-
+      {{ "certificates.apiCertFile/apiKeyFile not set in cluster.yaml"
+         if not finalize_api_cert_configured
+         else "declared paths (" + ocplab_api_cert_file + " / " + ocplab_api_key_file + ") don't both exist" }}
+      — keeping OpenShift's own self-signed API cert.
+  when: not finalize_api_cert_present
+
+- name: "Custom apps cert: configure it on the cluster"
+  when: finalize_apps_cert_present
+  block:
+    - name: Create/update the apps cert Secret in openshift-ingress
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: "{{ ocplab_cluster_name }}-apps-tls"
+            namespace: openshift-ingress
+          # See the API cert Secret above for why '+ "\n"' matters here.
+          stringData:
+            tls.crt: "{{ lookup('file', ocplab_apps_cert_file | expanduser) }}\n"
+            tls.key: "{{ lookup('file', ocplab_apps_key_file | expanduser) }}\n"
+
+    - name: Point the default IngressController at the custom *.apps cert
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operator.openshift.io/v1
+          kind: IngressController
+          metadata:
+            name: default
+            namespace: openshift-ingress-operator
+          spec:
+            defaultCertificate:
+              name: "{{ ocplab_cluster_name }}-apps-tls"
+
+- name: "Custom apps cert: not declared or not found, skipping"
+  ansible.builtin.debug:
+    msg: >-
+      {{ "certificates.appsCertFile/appsKeyFile not set in cluster.yaml"
+         if not finalize_apps_cert_configured
+         else "declared paths (" + ocplab_apps_cert_file + " / " + ocplab_apps_key_file + ") don't both exist" }}
+      — keeping OpenShift's own self-signed *.apps cert.
+  when: not finalize_apps_cert_present
+
+# Self-signed certs aren't signed by a publicly (or cluster-internally)
+# trusted CA, so plugging one into the router breaks in-cluster health
+# checks that call *.apps routes over HTTPS and validate against the
+# cluster's own trust bundle — found for real: the authentication
+# operator's OAuthServerRouteEndpointAccessibleController hits
+# 'oauth-openshift.apps.<cluster>.<domain>/healthz' and failed with
+# "x509: certificate signed by unknown authority" the moment the custom
+# apps cert went live, leaving that operator (and, as a knock-on effect,
+# kube-controller-manager/kube-scheduler rolling a new revision from the
+# APIServer change) stuck. Fixed the documented way: add the cert's own
+# PEM (a self-signed cert is its own root, valid as a trust anchor as-is)
+# to the cluster-wide trusted CA bundle via Proxy/cluster.spec.trustedCA
+# — the same mechanism OpenShift's own docs point to for OAuth-server
+# trust, not just outbound proxy trust.
+- name: "Custom certs: trust their CA cluster-wide"
+  when: finalize_api_cert_present or finalize_apps_cert_present
+  block:
+    - name: Build the combined CA bundle from whichever custom certs are present
+      ansible.builtin.set_fact:
+        finalize_ca_bundle: >-
+          {{
+            (lookup('file', ocplab_api_cert_file | expanduser) + "\n" if finalize_api_cert_present else '')
+            + (lookup('file', ocplab_apps_cert_file | expanduser) + "\n" if finalize_apps_cert_present else '')
+          }}
+
+    - name: Create/update the cluster-wide trusted CA bundle ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ ocplab_cluster_name }}-custom-ca-bundle"
+            namespace: openshift-config
+          data:
+            ca-bundle.crt: "{{ finalize_ca_bundle }}"
+
+    - name: Point the cluster-wide Proxy trust bundle at it
+      kubernetes.core.k8s:
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: config.openshift.io/v1
+          kind: Proxy
+          metadata:
+            name: cluster
+          spec:
+            trustedCA:
+              name: "{{ ocplab_cluster_name }}-custom-ca-bundle"
+
+    - name: Show the result
+      ansible.builtin.debug:
+        msg: >-
+          Custom cert CA(s) added to the cluster's trusted CA bundle
+          (ConfigMap openshift-config/{{ ocplab_cluster_name }}-custom-ca-bundle,
+          referenced by Proxy/cluster) — lets in-cluster health checks (e.g.
+          the authentication operator's OAuth route check) trust the
+          self-signed cert(s) instead of failing with
+          "x509: certificate signed by unknown authority".

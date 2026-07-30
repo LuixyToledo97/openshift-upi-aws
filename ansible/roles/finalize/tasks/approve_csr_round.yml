@@ -1,0 +1,52 @@
+---
+# Two rounds because there are two kinds of CSR: first the client one
+# (registers the node), and only after that does the kubelet request the
+# server one. That's why a wait is needed between rounds — too early and
+# the second round is empty.
+
+- name: "Round {{ finalize_csr_round }}/{{ ocplab_csr_approval_rounds }} — list pending CSRs"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: certificates.k8s.io/v1
+    kind: CertificateSigningRequest
+  register: finalize_csr_list
+
+# The equivalent of the README's go-template "{{if not .status}}": an
+# unapproved/undenied CSR has status:{} (no "conditions" key). WATCH OUT:
+# "[?!status.conditions]" (negation with !) does NOT work correctly when
+# combined with the ".metadata.name" projection right after it — jmespath
+# silently empties it out. Verified with the jmespath library in Python
+# before writing this. "== `null`" does work, and it's passed as a
+# separate var to avoid mixing YAML/Jinja escaping with jmespath's
+# backticks.
+# retries/until: the API server can transiently refuse connections while
+# masters are still settling (LB target health, kube-apiserver revision
+# rollouts) — found live in the 'power on' twin of this task (see
+# power/tasks/csr_approval_round.yml) where a single mid-loop "connection
+# refused" aborted the whole play instead of just retrying that item.
+# Same underlying flakiness can happen here too, so fixed the same way.
+- name: "Round {{ finalize_csr_round }}/{{ ocplab_csr_approval_rounds }} — approve the pending ones"
+  ansible.builtin.command:
+    cmd: "oc adm certificate approve {{ item }}"
+  environment:
+    KUBECONFIG: "{{ ocplab_kubeconfig }}"
+  loop: "{{ finalize_csr_list.resources | json_query(finalize_pending_csr_query) }}"
+  vars:
+    finalize_pending_csr_query: "[?status.conditions == `null`].metadata.name"
+  register: finalize_csr_approve_result
+  until: finalize_csr_approve_result.rc == 0
+  retries: 5
+  delay: 5
+
+- name: "Round {{ finalize_csr_round }}/{{ ocplab_csr_approval_rounds }} — summary"
+  ansible.builtin.debug:
+    msg: >-
+      {{ (finalize_csr_list.resources | json_query(finalize_pending_csr_query)) | length }}
+      CSRs approved in this round.
+  vars:
+    finalize_pending_csr_query: "[?status.conditions == `null`].metadata.name"
+
+- name: "Round {{ finalize_csr_round }}/{{ ocplab_csr_approval_rounds }} — wait before the next round"
+  ansible.builtin.pause:
+    seconds: "{{ ocplab_csr_round_wait_seconds }}"
+  when: finalize_csr_round < ocplab_csr_approval_rounds

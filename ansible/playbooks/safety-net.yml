@@ -1,0 +1,6 @@
+---
+- name: ocplab safety-net — budget, killswitch, and automatic lockdown (outside of Terraform)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - safety_net

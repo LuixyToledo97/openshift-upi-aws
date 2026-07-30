@@ -1,0 +1,26 @@
+---
+- name: Get all Nodes
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: v1
+    kind: Node
+  register: verify_nodes
+
+- name: Work out how many are Ready
+  vars:
+    verify_ready_node_query: "[?status.conditions[?type=='Ready' && status=='True']].metadata.name"
+  ansible.builtin.set_fact:
+    verify_nodes_total: "{{ verify_nodes.resources | length }}"
+    verify_nodes_ready: "{{ verify_nodes.resources | json_query(verify_ready_node_query) | length }}"
+    verify_nodes_expected: "{{ ocplab_control_plane_replicas + ocplab_compute_replicas }}"
+
+- name: Record a problem if the node count/readiness doesn't match what's expected
+  ansible.builtin.set_fact:
+    verify_problems: "{{ verify_problems + ['Nodes: ' + verify_nodes_ready|string + '/' + verify_nodes_total|string + ' Ready, expected ' + verify_nodes_expected|string] }}"
+  when: >-
+    verify_nodes_ready | int != verify_nodes_expected | int
+    or verify_nodes_total | int != verify_nodes_expected | int
+
+- name: Show the node status
+  ansible.builtin.debug:
+    msg: "{{ verify_nodes_ready }}/{{ verify_nodes_total }} Ready (expected {{ verify_nodes_expected }})"

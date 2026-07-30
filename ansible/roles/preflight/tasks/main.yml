@@ -1,0 +1,36 @@
+---
+# preflight: read-only. No task in this role should create or modify
+# anything in AWS — this is the check that runs BEFORE spending any money.
+#
+# Same philosophy as `ocplab validate`: don't fail at the first problem,
+# accumulate them all in `preflight_problems` and report them together at
+# the end.
+
+- name: Initialize the problem list
+  ansible.builtin.set_fact:
+    preflight_problems: []
+
+- name: Required binaries
+  ansible.builtin.import_tasks: binaries.yml
+
+- name: AWS credentials and pull secret
+  ansible.builtin.import_tasks: credentials.yml
+
+- name: DNS delegation
+  ansible.builtin.import_tasks: dns.yml
+
+- name: RHCOS AMI
+  ansible.builtin.import_tasks: ami.yml
+
+- name: Show the problems found
+  ansible.builtin.debug:
+    msg: "{{ preflight_problems }}"
+  when: preflight_problems | length > 0
+
+- name: Preflight passed
+  ansible.builtin.assert:
+    that: preflight_problems | length == 0
+    fail_msg: >-
+      {{ preflight_problems | length }} problem(s) found — check the list
+      above before continuing with 'ocplab deploy'.
+    success_msg: "preflight: all good, ready for 'ocplab deploy'."

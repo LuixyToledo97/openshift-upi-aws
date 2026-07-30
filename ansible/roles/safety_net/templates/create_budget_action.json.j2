@@ -1,0 +1,20 @@
+{
+  "AccountId": "{{ sn_caller.account }}",
+  "BudgetName": "{{ safety_net_budget_name }}",
+  "NotificationType": "ACTUAL",
+  "ActionType": "APPLY_IAM_POLICY",
+  "ActionThreshold": {"ActionThresholdValue": 80, "ActionThresholdType": "PERCENTAGE"},
+  "Definition": {
+    "IamActionDefinition": {
+      "PolicyArn": "{{ sn_deny_policy.policy.arn }}",
+      "Users": ["{{ ocplab_iam_user_name }}"]
+    }
+  },
+  "ExecutionRoleArn": "{{ sn_budget_action_role.iam_role.arn }}",
+  "ApprovalModel": "AUTOMATIC",
+  "Subscribers": [
+{% for email in ocplab_safety_net_alert_emails %}
+    {"SubscriptionType": "EMAIL", "Address": "{{ email }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+}

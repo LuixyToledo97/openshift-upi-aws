@@ -1,0 +1,20 @@
+---
+- name: List the VPC's security groups
+  amazon.aws.ec2_security_group_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      vpc-id: "{{ teardown_vpc_id }}"
+  register: teardown_sg_info
+
+# Only touch the ones Terraform does NOT manage. Its own are named
+# "{{ ocplab_cluster_name }}-*"; the orphaned security group from the
+# ingress-operator's router ELB is always k8s-elb-*.
+- name: Delete orphaned k8s-elb-* security groups
+  amazon.aws.ec2_security_group:
+    profile: "{{ ocplab_aws_profile }}"
+    group_id: "{{ item.group_id }}"
+    state: absent
+  loop: "{{ teardown_sg_info.security_groups | selectattr('group_name', 'match', '^k8s-elb-') | list }}"
+  loop_control:
+    label: "{{ item.group_name }} ({{ item.group_id }})"
+  ignore_errors: true

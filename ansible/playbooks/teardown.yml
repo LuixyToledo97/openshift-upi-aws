@@ -1,0 +1,8 @@
+---
+# Standalone for now — composed into playbooks/destroy.yml, together with
+# the confirm_msg from the ocplab CLI layer.
+- name: ocplab teardown — ordered cleanup before terraform destroy
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - teardown

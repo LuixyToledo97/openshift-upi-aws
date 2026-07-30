@@ -1,0 +1,6 @@
+---
+- name: ocplab power — graceful cluster shutdown/startup (on/off)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - power

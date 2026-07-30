@@ -1,0 +1,6 @@
+---
+- name: ocplab preflight — pre-deployment checks (read-only)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - preflight

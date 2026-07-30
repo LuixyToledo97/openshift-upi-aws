@@ -1,0 +1,62 @@
+---
+- name: Check whether the configured public key already exists
+  ansible.builtin.stat:
+    path: "{{ ocplab_ssh_public_key_file }}"
+  register: bootstrap_ssh_pub_stat
+
+- name: Work out the (expanded) private key path
+  ansible.builtin.set_fact:
+    bootstrap_ssh_private_key_file: "{{ (ocplab_ssh_public_key_file | regex_replace('\\.pub$', '')) | expanduser }}"
+
+- name: "apply/status: create the SSH keypair if missing"
+  when: ocplab_bootstrap_action in ['apply', 'status']
+  block:
+    - name: Make sure ~/.ssh exists with the right permissions
+      ansible.builtin.file:
+        path: "{{ '~/.ssh' | expanduser }}"
+        state: directory
+        mode: "0700"
+      check_mode: "{{ true if ocplab_bootstrap_action == 'status' else omit }}"
+      when: not bootstrap_ssh_pub_stat.stat.exists
+
+    - name: Generate an ed25519 SSH keypair if the public key is missing
+      ansible.builtin.command:
+        cmd: "ssh-keygen -t ed25519 -N '' -f {{ bootstrap_ssh_private_key_file }}"
+        creates: "{{ ocplab_ssh_public_key_file }}"
+      register: bootstrap_ssh_keygen
+      failed_when: false
+      when:
+        - not bootstrap_ssh_pub_stat.stat.exists
+        - ocplab_bootstrap_action == 'apply'
+
+    - name: Record a problem if ssh-keygen failed
+      ansible.builtin.set_fact:
+        bootstrap_problems: "{{ bootstrap_problems + ['SSH: could not generate the key at ' + bootstrap_ssh_private_key_file + ' (' + (bootstrap_ssh_keygen.stderr | default('unknown error')) + ')'] }}"
+      when:
+        - bootstrap_ssh_keygen is defined
+        - bootstrap_ssh_keygen.rc is defined
+        - bootstrap_ssh_keygen.rc != 0
+
+    - name: Show the SSH key status
+      ansible.builtin.debug:
+        msg: >-
+          SSH key: {{ ocplab_ssh_public_key_file }}
+          ({{ 'exists' if bootstrap_ssh_pub_stat.stat.exists
+              else ('would be generated' if ocplab_bootstrap_action == 'status' else 'generated now') }})
+
+- name: "destroy: delete the local SSH keypair"
+  when: ocplab_bootstrap_action == 'destroy'
+  block:
+    - name: Delete the private and public key files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ bootstrap_ssh_private_key_file }}"
+        - "{{ ocplab_ssh_public_key_file | expanduser }}"
+
+    - name: Show the result
+      ansible.builtin.debug:
+        msg: >-
+          SSH key: {{ 'deleted' if bootstrap_ssh_pub_stat.stat.exists
+                       else 'did not exist, nothing to delete' }}

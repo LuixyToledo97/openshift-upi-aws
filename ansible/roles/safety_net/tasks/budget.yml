@@ -1,0 +1,39 @@
+---
+# No Ansible module for AWS Budgets (neither in amazon.aws nor in
+# community.aws) — use the CLI directly, with a "describe" before
+# creating so it doesn't fail on the second run.
+- name: Check whether the budget already exists
+  ansible.builtin.command:
+    cmd: >-
+      aws budgets describe-budget --profile {{ ocplab_aws_profile }}
+      --account-id {{ sn_caller.account }} --budget-name {{ safety_net_budget_name }}
+  register: sn_budget_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Render the budget creation payload
+  ansible.builtin.template:
+    src: create_budget.json.j2
+    dest: "{{ sn_tmp_dir.path }}/create_budget.json"
+    mode: "0600"
+  when: ocplab_safety_net_action == 'apply' and sn_budget_check.rc != 0
+
+- name: "Create the {{ safety_net_budget_name }} budget (50 USD/month by default, alerts at 50/80/100%)"
+  ansible.builtin.command:
+    cmd: >-
+      aws budgets create-budget --profile {{ ocplab_aws_profile }}
+      --cli-input-json file://{{ sn_tmp_dir.path }}/create_budget.json
+  when: ocplab_safety_net_action == 'apply' and sn_budget_check.rc != 0
+
+- name: Delete the budget (its notifications get deleted with it)
+  ansible.builtin.command:
+    cmd: >-
+      aws budgets delete-budget --profile {{ ocplab_aws_profile }}
+      --account-id {{ sn_caller.account }} --budget-name {{ safety_net_budget_name }}
+  when: ocplab_safety_net_action == 'destroy' and sn_budget_check.rc == 0
+
+- name: "Status: budget"
+  ansible.builtin.debug:
+    msg: "{{ safety_net_budget_name }}: {{ 'exists' if sn_budget_check.rc == 0 else 'does not exist' }}"
+  when: ocplab_safety_net_action == 'status'

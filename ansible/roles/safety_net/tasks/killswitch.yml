@@ -1,0 +1,98 @@
+---
+- name: "{{ ocplab_safety_net_action }}: IAM role {{ safety_net_killswitch_role_name }}"
+  amazon.aws.iam_role:
+    profile: "{{ ocplab_aws_profile }}"
+    name: "{{ safety_net_killswitch_role_name }}"
+    state: "{{ 'absent' if ocplab_safety_net_action == 'destroy' else 'present' }}"
+    assume_role_policy_document:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Principal: {Service: lambda.amazonaws.com}
+          Action: sts:AssumeRole
+    create_instance_profile: false
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  register: sn_killswitch_role
+
+# Only in apply/status — when the role gets deleted above, its policies
+# are already cleaned up on their own (see the same reasoning in
+# budget_action.yml). In 'status', only run if the role above was found
+# to already exist — same NoSuchEntity crash risk as budget_action.yml if
+# attempted against a role that doesn't exist.
+- name: "{{ ocplab_safety_net_action }}: permissions for role {{ safety_net_killswitch_role_name }}"
+  amazon.aws.iam_policy:
+    profile: "{{ ocplab_aws_profile }}"
+    iam_type: role
+    iam_name: "{{ safety_net_killswitch_role_name }}"
+    policy_name: killswitch-permissions
+    state: present
+    policy_json:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Action:
+            - ec2:DescribeInstances
+            - ec2:TerminateInstances
+            - ec2:DescribeNatGateways
+            - ec2:DeleteNatGateway
+            - ec2:DescribeAddresses
+            - ec2:ReleaseAddress
+            - elasticloadbalancing:DescribeLoadBalancers
+            - elasticloadbalancing:DescribeTags
+            - elasticloadbalancing:DeleteLoadBalancer
+          Resource: "*"
+        - Effect: Allow
+          Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+          Resource: "arn:aws:logs:*:*:*"
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  when: >-
+    ocplab_safety_net_action == 'apply'
+    or (ocplab_safety_net_action == 'status' and not sn_killswitch_role.changed)
+
+# Also rendered and packaged in 'status': amazon.aws.lambda requires
+# zip_file when state=present even under forced check_mode (it's a
+# parameter validation, not a state one) — simpler to always do it than
+# to have two separate paths for the call below.
+- name: Render the function's code and package it
+  when: ocplab_safety_net_action in ['apply', 'status']
+  block:
+    - name: Render lambda_function.py from the template
+      ansible.builtin.template:
+        src: lambda_function.py.j2
+        dest: "{{ sn_tmp_dir.path }}/lambda_function.py"
+      check_mode: false
+
+    - name: Package it into a zip
+      community.general.archive:
+        path: "{{ sn_tmp_dir.path }}/lambda_function.py"
+        dest: "{{ sn_tmp_dir.path }}/lambda_function.zip"
+        format: zip
+      check_mode: false
+
+# Same IAM-propagation delay as the Budget Action (see budget_action.yml):
+# right after creating killswitch_role above, Lambda can still fail with
+# "The role defined for the function cannot be assumed by Lambda" for a
+# few seconds. Found running this for real. until/retries only really
+# apply to the create path (state=present) — deleting doesn't hit this.
+- name: "{{ ocplab_safety_net_action }}: function {{ safety_net_killswitch_function_name }}"
+  amazon.aws.lambda:
+    profile: "{{ ocplab_aws_profile }}"
+    name: "{{ safety_net_killswitch_function_name }}"
+    state: "{{ 'absent' if ocplab_safety_net_action == 'destroy' else 'present' }}"
+    runtime: python3.12
+    handler: lambda_function.lambda_handler
+    role: "{{ sn_killswitch_role.iam_role.arn | default(safety_net_killswitch_role_name) }}"
+    zip_file: "{{ (sn_tmp_dir.path + '/lambda_function.zip') if ocplab_safety_net_action != 'destroy' else omit }}"
+    timeout: 60
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  register: sn_killswitch_lambda
+  until: sn_killswitch_lambda is not failed
+  retries: "{{ 6 if ocplab_safety_net_action == 'apply' else 0 }}"
+  delay: 10
+
+- name: "Status: function {{ safety_net_killswitch_function_name }}"
+  ansible.builtin.debug:
+    msg: >-
+      {{ safety_net_killswitch_function_name }}:
+      {{ 'exists' if not sn_killswitch_lambda.changed else 'does not exist (or is out of date)' }}
+  when: ocplab_safety_net_action == 'status'

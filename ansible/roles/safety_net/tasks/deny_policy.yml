@@ -1,0 +1,29 @@
+---
+# state=absent on iam_managed_policy detaches it from EVERYTHING it's
+# attached to and deletes it — no need for a separate manual detach
+# (unlike the original cleanup-safety-net.sh, which did that by hand).
+- name: "{{ ocplab_safety_net_action }}: lockdown policy {{ safety_net_deny_policy_name }}"
+  amazon.aws.iam_managed_policy:
+    profile: "{{ ocplab_aws_profile }}"
+    name: "{{ safety_net_deny_policy_name }}"
+    state: "{{ 'absent' if ocplab_safety_net_action == 'destroy' else 'present' }}"
+    policy:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Deny
+          Action:
+            - ec2:RunInstances
+            - ec2:CreateNatGateway
+            - ec2:AllocateAddress
+            - elasticloadbalancing:CreateLoadBalancer
+            - rds:CreateDBInstance
+          Resource: "*"
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  register: sn_deny_policy
+
+- name: "Status: lockdown policy"
+  ansible.builtin.debug:
+    msg: >-
+      {{ safety_net_deny_policy_name }}:
+      {{ 'exists' if not sn_deny_policy.changed else 'does not exist (or is out of date)' }}
+  when: ocplab_safety_net_action == 'status'

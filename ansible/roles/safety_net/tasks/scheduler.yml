@@ -1,0 +1,107 @@
+---
+- name: "{{ ocplab_safety_net_action }}: IAM role {{ safety_net_scheduler_role_name }}"
+  amazon.aws.iam_role:
+    profile: "{{ ocplab_aws_profile }}"
+    name: "{{ safety_net_scheduler_role_name }}"
+    state: "{{ 'absent' if ocplab_safety_net_action == 'destroy' else 'present' }}"
+    assume_role_policy_document:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Principal: {Service: scheduler.amazonaws.com}
+          Action: sts:AssumeRole
+    create_instance_profile: false
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  register: sn_scheduler_role
+
+# In 'status', only run if the role above was found to already exist —
+# same NoSuchEntity crash risk as budget_action.yml/killswitch.yml if
+# attempted against a role that doesn't exist.
+- name: "{{ ocplab_safety_net_action }}: permissions for role {{ safety_net_scheduler_role_name }}"
+  amazon.aws.iam_policy:
+    profile: "{{ ocplab_aws_profile }}"
+    iam_type: role
+    iam_name: "{{ safety_net_scheduler_role_name }}"
+    policy_name: scheduler-invoke-lambda
+    state: present
+    policy_json:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Action: lambda:InvokeFunction
+          Resource: "arn:aws:lambda:{{ ocplab_aws_region }}:{{ sn_caller.account }}:function:{{ safety_net_killswitch_function_name }}"
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  when: >-
+    ocplab_safety_net_action == 'apply'
+    or (ocplab_safety_net_action == 'status' and not sn_scheduler_role.changed)
+
+# The scheduler ARN is predictable (the schedule doesn't need to exist
+# yet): arn:aws:scheduler:REGION:ACCOUNT:schedule/default/NAME.
+#
+# Same NoSuchEntity-class risk in 'status' as the iam_policy tasks above,
+# but on the killswitch Lambda instead of a role: only attempt this if
+# killswitch.yml (imported earlier in the same status block) found the
+# function to already exist (sn_killswitch_lambda.changed == false).
+- name: "{{ ocplab_safety_net_action }}: permission for the scheduler to invoke the killswitch"
+  amazon.aws.lambda_policy:
+    profile: "{{ ocplab_aws_profile }}"
+    function_name: "{{ safety_net_killswitch_function_name }}"
+    statement_id: allow-eventbridge-scheduler
+    state: "{{ 'absent' if ocplab_safety_net_action == 'destroy' else 'present' }}"
+    action: lambda:InvokeFunction
+    principal: scheduler.amazonaws.com
+    source_arn: "arn:aws:scheduler:{{ ocplab_aws_region }}:{{ sn_caller.account }}:schedule/default/{{ safety_net_schedule_name }}"
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  when: ocplab_safety_net_action != 'status' or not sn_killswitch_lambda.changed
+
+# No Ansible module for EventBridge Scheduler (a different service from
+# EventBridge Rules, which does have one) — direct CLI, with a "get"
+# before creating.
+- name: Check whether the schedule already exists
+  ansible.builtin.command:
+    cmd: "aws scheduler get-schedule --profile {{ ocplab_aws_profile }} --name {{ safety_net_schedule_name }}"
+  register: sn_schedule_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Render the schedule creation payload
+  ansible.builtin.template:
+    src: create_schedule.json.j2
+    dest: "{{ sn_tmp_dir.path }}/create_schedule.json"
+    mode: "0600"
+  when: ocplab_safety_net_action == 'apply' and sn_schedule_check.rc != 0
+
+# Same IAM-propagation delay as the Budget Action and the killswitch
+# Lambda (see budget_action.yml/killswitch.yml) — added pre-emptively
+# after hitting the same failure twice in a row on the other two
+# resources that assume a role right after it's created.
+- name: "Create the daily schedule at 22:00 {{ ocplab_safety_net_killswitch_timezone }}"
+  ansible.builtin.command:
+    cmd: >-
+      aws scheduler create-schedule --profile {{ ocplab_aws_profile }}
+      --cli-input-json file://{{ sn_tmp_dir.path }}/create_schedule.json
+  register: sn_schedule_create
+  until: sn_schedule_create.rc == 0
+  retries: 6
+  delay: 10
+  failed_when: false
+  when: ocplab_safety_net_action == 'apply' and sn_schedule_check.rc != 0
+
+- name: Fail with a clear message if the schedule still couldn't be created
+  ansible.builtin.fail:
+    msg: "{{ sn_schedule_create.stderr | default('unknown error') }}"
+  when: >-
+    ocplab_safety_net_action == 'apply'
+    and sn_schedule_check.rc != 0
+    and sn_schedule_create.rc | default(1) != 0
+
+- name: Delete the schedule
+  ansible.builtin.command:
+    cmd: "aws scheduler delete-schedule --profile {{ ocplab_aws_profile }} --name {{ safety_net_schedule_name }}"
+  when: ocplab_safety_net_action == 'destroy' and sn_schedule_check.rc == 0
+
+- name: "Status: schedule"
+  ansible.builtin.debug:
+    msg: "{{ safety_net_schedule_name }}: {{ 'exists' if sn_schedule_check.rc == 0 else 'does not exist' }}"
+  when: ocplab_safety_net_action == 'status'

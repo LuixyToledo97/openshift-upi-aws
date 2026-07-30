@@ -1,0 +1,16 @@
+---
+# render was already done by 'ocplab deploy' in Python before invoking
+# this (cmd_deploy calls cmd_render first). All that's left here:
+# generate/regenerate Ignition, apply Terraform, wait for and tear down
+# the bootstrap, and finish the cluster off (CSR, CPMS, wait-for
+# install-complete).
+- name: ocplab deploy — ignition + infra + cluster boot + finalize
+  hosts: localhost
+  gather_facts: true
+  roles:
+    - ignition
+    - role: infra
+      vars:
+        infra_state: present
+    - cluster_boot
+    - finalize

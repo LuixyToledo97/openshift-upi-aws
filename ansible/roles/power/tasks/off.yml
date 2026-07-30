@@ -1,0 +1,102 @@
+---
+# Order and method match Red Hat's documented graceful-shutdown procedure
+# (openshift/openshift-docs, modules/graceful-shutdown.adoc — fetched and
+# read directly from GitHub source, docs.redhat.com blocks bot/tool
+# traffic): cordon every node, drain WORKERS ONLY ("Control plane node
+# draining is unnecessary for standard cluster pods"), then shut down via
+# an in-guest 'shutdown' command — not a raw cloud-provider stop call —
+# so etcd/kubelet/crio close cleanly first. Workers go down before
+# masters, so the control plane (holding the API VIP) is the last thing
+# to go.
+
+- name: Set master/worker node names (= EC2 private DNS names)
+  ansible.builtin.set_fact:
+    power_master_node_names: "{{ power_master_instances.instances | map(attribute='private_dns_name') | list }}"
+    power_worker_node_names: "{{ power_worker_instances.instances | map(attribute='private_dns_name') | list }}"
+
+# Informational only — this is a lab, not a hard block. Red Hat's own
+# guidance: restart on or before this date to avoid extra manual CSR
+# approval on top of the normal post-restart ones.
+- name: Check the kube-apiserver-to-kubelet-signer cert expiry
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    name: kube-apiserver-to-kubelet-signer
+    namespace: openshift-kube-apiserver-operator
+  register: power_signer_secret
+  ignore_errors: true
+
+- name: Show the cert-expiry warning
+  ansible.builtin.debug:
+    msg: >-
+      Restart this cluster on or before
+      {{ power_signer_secret.resources[0].metadata.annotations['auth.openshift.io/certificate-not-after'] }}
+      to avoid extra manual CSR approvals on top of the normal post-restart ones.
+  when:
+    - not (power_signer_secret.failed | default(true))
+    - power_signer_secret.resources | default([]) | length > 0
+
+- name: Cordon every node
+  ansible.builtin.command:
+    cmd: "oc adm cordon {{ item }}"
+  environment:
+    KUBECONFIG: "{{ ocplab_kubeconfig }}"
+  loop: "{{ power_master_node_names + power_worker_node_names }}"
+
+- name: Drain worker nodes (masters don't need it — standard cluster pods only)
+  ansible.builtin.command:
+    cmd: >-
+      oc adm drain {{ item }} --delete-emptydir-data --ignore-daemonsets=true
+      --force --timeout=120s
+  environment:
+    KUBECONFIG: "{{ ocplab_kubeconfig }}"
+  loop: "{{ power_worker_node_names }}"
+
+# The debug session itself can report a nonzero exit as the node goes
+# down mid-command (the connection just drops) — expected, not a real
+# failure, hence failed_when: false.
+- name: Shut down the workers (in-guest shutdown, graceful)
+  ansible.builtin.command:
+    cmd: "oc debug node/{{ item }} -- chroot /host shutdown -h 1"
+  environment:
+    KUBECONFIG: "{{ ocplab_kubeconfig }}"
+  loop: "{{ power_worker_node_names }}"
+  failed_when: false
+  when: power_worker_node_names | length > 0
+
+- name: Real poll until the worker instances report 'stopped'
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    instance_ids: "{{ power_worker_instances.instances | map(attribute='instance_id') | list }}"
+  register: power_worker_stop_poll
+  until: (power_worker_stop_poll.instances | map(attribute='state.name') | unique | list) == ['stopped']
+  retries: "{{ (power_stop_timeout / power_stop_poll_interval) | int }}"
+  delay: "{{ power_stop_poll_interval }}"
+  when: power_worker_instances.instances | length > 0
+
+- name: Shut down the masters (last — the control plane holds the API VIP)
+  ansible.builtin.command:
+    cmd: "oc debug node/{{ item }} -- chroot /host shutdown -h 1"
+  environment:
+    KUBECONFIG: "{{ ocplab_kubeconfig }}"
+  loop: "{{ power_master_node_names }}"
+  failed_when: false
+  when: power_master_node_names | length > 0
+
+- name: Real poll until the master instances report 'stopped'
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    instance_ids: "{{ power_master_instances.instances | map(attribute='instance_id') | list }}"
+  register: power_master_stop_poll
+  until: (power_master_stop_poll.instances | map(attribute='state.name') | unique | list) == ['stopped']
+  retries: "{{ (power_stop_timeout / power_stop_poll_interval) | int }}"
+  delay: "{{ power_stop_poll_interval }}"
+  when: power_master_instances.instances | length > 0
+
+- name: Show the result
+  ansible.builtin.debug:
+    msg: >-
+      Stopped {{ power_master_node_names | length }} master(s) and
+      {{ power_worker_node_names | length }} worker(s). Run
+      'ocplab power on' to bring the cluster back up.

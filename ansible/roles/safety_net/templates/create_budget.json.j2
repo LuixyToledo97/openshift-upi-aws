@@ -1,0 +1,26 @@
+{
+  "AccountId": "{{ sn_caller.account }}",
+  "Budget": {
+    "BudgetName": "{{ safety_net_budget_name }}",
+    "BudgetLimit": {"Amount": "{{ ocplab_safety_net_budget_usd }}", "Unit": "USD"},
+    "TimeUnit": "MONTHLY",
+    "BudgetType": "COST"
+  },
+  "NotificationsWithSubscribers": [
+{% for threshold in [50, 80, 100] %}
+    {
+      "Notification": {
+        "NotificationType": "ACTUAL",
+        "ComparisonOperator": "GREATER_THAN",
+        "Threshold": {{ threshold }},
+        "ThresholdType": "PERCENTAGE"
+      },
+      "Subscribers": [
+{% for email in ocplab_safety_net_alert_emails %}
+        {"SubscriptionType": "EMAIL", "Address": "{{ email }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+      ]
+    }{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+}

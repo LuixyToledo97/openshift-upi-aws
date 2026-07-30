@@ -1,0 +1,70 @@
+---
+# verify: read-only, like preflight. No task in this role should create
+# or modify anything — it's a health check against an already-deployed
+# cluster, not a deploy step. Same philosophy as preflight/validate:
+# don't fail at the first problem, accumulate them all in
+# verify_problems and report together at the end.
+
+- name: Check whether install-dir's kubeconfig exists
+  ansible.builtin.stat:
+    path: "{{ ocplab_kubeconfig | expanduser }}"
+  register: verify_kubeconfig_stat
+
+- name: Fail fast if there's no cluster to verify
+  ansible.builtin.assert:
+    that: verify_kubeconfig_stat.stat.exists
+    fail_msg: >-
+      No kubeconfig at {{ ocplab_kubeconfig }} — nothing deployed yet.
+      Run 'ocplab deploy' first.
+
+# A fast, BOUNDED reachability probe before ever touching the Kubernetes
+# client. Found the hard way: kubernetes.core.k8s_info has no connection-
+# timeout parameter of its own (checked: only 'wait_timeout', which times
+# out waiting for a resource STATE, not the initial connection) — when the
+# API is genuinely unreachable (e.g. the cluster is powered off via
+# 'ocplab power off', so the NLB has zero healthy targets), the
+# Kubernetes Python client's own default can hang far longer than
+# reasonable instead of failing quickly. wait_for is a plain TCP check
+# with an explicit timeout, so this fails fast and clearly instead.
+- name: Check whether the API server port is even reachable (fast, bounded)
+  ansible.builtin.wait_for:
+    host: "api.{{ ocplab_cluster_name }}.{{ ocplab_base_domain }}"
+    port: 6443
+    timeout: "{{ verify_api_reachability_timeout }}"
+    state: started
+  register: verify_api_reachable
+  ignore_errors: true
+
+- name: Fail fast and skip everything else if the API isn't reachable
+  ansible.builtin.assert:
+    that: not verify_api_reachable.failed
+    fail_msg: >-
+      Cluster API (api.{{ ocplab_cluster_name }}.{{ ocplab_base_domain }}:6443)
+      not reachable within {{ verify_api_reachability_timeout }}s — the cluster
+      is likely powered off or destroyed. Check 'ocplab power status' or
+      'ocplab status'; run 'ocplab power on' if it's just powered off.
+
+- name: Initialize the problem list
+  ansible.builtin.set_fact:
+    verify_problems: []
+
+- name: ClusterVersion
+  ansible.builtin.import_tasks: clusterversion.yml
+
+- name: Nodes
+  ansible.builtin.import_tasks: nodes.yml
+
+- name: ClusterOperators
+  ansible.builtin.import_tasks: clusteroperators.yml
+
+- name: Show the problems found
+  ansible.builtin.debug:
+    msg: "{{ verify_problems }}"
+  when: verify_problems | length > 0
+
+- name: Verify passed
+  ansible.builtin.assert:
+    that: verify_problems | length == 0
+    fail_msg: >-
+      {{ verify_problems | length }} problem(s) found — check the list above.
+    success_msg: "verify: cluster is healthy."

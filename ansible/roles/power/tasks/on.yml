@@ -1,0 +1,114 @@
+---
+# Order matches Red Hat's documented graceful-restart procedure
+# (openshift/openshift-docs, modules/graceful-restart.adoc): masters
+# first, wait for them Ready (approving any CSRs along the way), only
+# then workers, same wait+approve, then uncordon everything, then a full
+# health check.
+#
+# Readiness is checked by NODE NAME, not by the
+# node-role.kubernetes.io/worker LABEL — found while designing this: in
+# this lab the masters are schedulable and carry BOTH the master AND
+# worker labels ("control-plane,master,worker" in `oc get nodes`), so a
+# label-based query for "worker readiness" would incorrectly also match
+# the 3 masters. Node names come from the EC2 instances' own
+# private_dns_name (set in main.yml) instead, which unambiguously
+# separates the two groups.
+
+- name: Set master/worker node names (= EC2 private DNS names)
+  ansible.builtin.set_fact:
+    power_master_node_names: "{{ power_master_instances.instances | map(attribute='private_dns_name') | list }}"
+    power_worker_node_names: "{{ power_worker_instances.instances | map(attribute='private_dns_name') | list }}"
+
+- name: Start the master instances
+  amazon.aws.ec2_instance:
+    profile: "{{ ocplab_aws_profile }}"
+    instance_ids: "{{ power_master_instances.instances | map(attribute='instance_id') | list }}"
+    state: running
+  when: power_master_instances.instances | length > 0
+
+- name: Real poll until the master instances report 'running'
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    instance_ids: "{{ power_master_instances.instances | map(attribute='instance_id') | list }}"
+  register: power_master_start_poll
+  until: (power_master_start_poll.instances | map(attribute='state.name') | unique | list) == ['running']
+  retries: "{{ (power_start_timeout / power_start_poll_interval) | int }}"
+  delay: "{{ power_start_poll_interval }}"
+  when: power_master_instances.instances | length > 0
+
+- name: Real poll until master nodes report Ready
+  vars:
+    power_ready_node_query: "[?status.conditions[?type=='Ready' && status=='True']].metadata.name"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: v1
+    kind: Node
+  register: power_master_ready_poll
+  until: >-
+    (power_master_node_names
+     | difference(power_master_ready_poll.resources | default([]) | json_query(power_ready_node_query))
+     | length) == 0
+  retries: "{{ (power_ready_timeout / power_ready_poll_interval) | int }}"
+  delay: "{{ power_ready_poll_interval }}"
+  ignore_errors: true
+  when: power_master_instances.instances | length > 0
+
+- name: "Approve pending CSRs after masters came back ({{ ocplab_csr_approval_rounds }} rounds)"
+  ansible.builtin.include_tasks: csr_approval_round.yml
+  loop: "{{ range(1, ocplab_csr_approval_rounds + 1) | list }}"
+  loop_control:
+    loop_var: power_csr_round
+  when: power_master_instances.instances | length > 0
+
+- name: Start the worker instances
+  amazon.aws.ec2_instance:
+    profile: "{{ ocplab_aws_profile }}"
+    instance_ids: "{{ power_worker_instances.instances | map(attribute='instance_id') | list }}"
+    state: running
+  when: power_worker_instances.instances | length > 0
+
+- name: Real poll until the worker instances report 'running'
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    instance_ids: "{{ power_worker_instances.instances | map(attribute='instance_id') | list }}"
+  register: power_worker_start_poll
+  until: (power_worker_start_poll.instances | map(attribute='state.name') | unique | list) == ['running']
+  retries: "{{ (power_start_timeout / power_start_poll_interval) | int }}"
+  delay: "{{ power_start_poll_interval }}"
+  when: power_worker_instances.instances | length > 0
+
+- name: Real poll until worker nodes report Ready
+  vars:
+    power_ready_node_query: "[?status.conditions[?type=='Ready' && status=='True']].metadata.name"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: v1
+    kind: Node
+  register: power_worker_ready_poll
+  until: >-
+    (power_worker_node_names
+     | difference(power_worker_ready_poll.resources | default([]) | json_query(power_ready_node_query))
+     | length) == 0
+  retries: "{{ (power_ready_timeout / power_ready_poll_interval) | int }}"
+  delay: "{{ power_ready_poll_interval }}"
+  ignore_errors: true
+  when: power_worker_instances.instances | length > 0
+
+- name: "Approve pending CSRs after workers came back ({{ ocplab_csr_approval_rounds }} rounds)"
+  ansible.builtin.include_tasks: csr_approval_round.yml
+  loop: "{{ range(1, ocplab_csr_approval_rounds + 1) | list }}"
+  loop_control:
+    loop_var: power_csr_round
+  when: power_worker_instances.instances | length > 0
+
+- name: Uncordon every node
+  ansible.builtin.command:
+    cmd: "oc adm uncordon {{ item }}"
+  environment:
+    KUBECONFIG: "{{ ocplab_kubeconfig }}"
+  loop: "{{ power_master_node_names + power_worker_node_names }}"
+  failed_when: false
+
+- name: Final verification — reuse the 'verify' role as-is
+  ansible.builtin.include_role:
+    name: verify

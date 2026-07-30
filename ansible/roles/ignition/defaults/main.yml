@@ -1,0 +1,5 @@
+---
+# Override with 'ocplab ignition --force' — regenerates even if install-dir
+# is recent. Rarely needed (it changes the infraID and requires a fresh
+# terraform apply).
+ignition_force: false

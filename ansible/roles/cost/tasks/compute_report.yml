@@ -1,0 +1,63 @@
+---
+# Hands the discovered resources + cost_final_prices to compute_cost.py
+# (plain Python — see that file for why) and prints the breakdown.
+
+- name: Temporary file for the cost computation input
+  ansible.builtin.tempfile:
+    state: file
+    suffix: cost-input.json
+  register: cost_input_tmpfile
+  changed_when: false
+
+- name: Write the computation input
+  vars:
+    cost_input_data:
+      instances: "{{ cost_instances | json_query('[].{instance_type: instance_type, state: state.name}') }}"
+      volumes: "{{ cost_volumes | json_query('[].{size: size, type: type}') }}"
+      nat_count: "{{ cost_nat_gateways.result | default([]) | length }}"
+      lb_count: "{{ cost_lbs | length }}"
+      eip_count: "{{ cost_eips.addresses | default([]) | length }}"
+      prices: "{{ cost_final_prices }}"
+  ansible.builtin.copy:
+    content: "{{ cost_input_data | to_nice_json }}"
+    dest: "{{ cost_input_tmpfile.path }}"
+    mode: "0600"
+  changed_when: false
+
+- name: Compute the cost breakdown
+  ansible.builtin.command:
+    cmd: "python3 {{ role_path }}/files/compute_cost.py {{ cost_input_tmpfile.path }}"
+  register: cost_compute_result
+  changed_when: false
+
+- name: Parse the computed report
+  ansible.builtin.set_fact:
+    cost_report: "{{ cost_compute_result.stdout | from_json }}"
+
+- name: Clean up the temporary input file
+  ansible.builtin.file:
+    path: "{{ cost_input_tmpfile.path }}"
+    state: absent
+  changed_when: false
+
+- name: "Cost report"
+  ansible.builtin.debug:
+    msg:
+      - "=== Approximate hourly cost — {{ ocplab_cluster_name }} ({{ ocplab_aws_region }}) ==="
+      - "Compute (EC2, {{ cost_report.running_instances }} running / {{ cost_report.stopped_instances }} stopped): ${{ cost_report.ec2_hourly }}/h"
+      - "Storage (EBS, {{ cost_report.volume_count }} volume(s), {{ cost_report.volume_total_gb }} GB total): ${{ cost_report.ebs_hourly }}/h"
+      - "NAT Gateway ({{ cost_report.nat_count }}): ${{ cost_report.nat_hourly }}/h"
+      - "Load Balancers ({{ cost_report.lb_count }}): ${{ cost_report.lb_hourly }}/h"
+      - "Public IPv4 addresses ({{ cost_report.eip_count }}): ${{ cost_report.eip_hourly }}/h"
+      - "-----------------------------------------------------------"
+      - "TOTAL: ${{ cost_report.total_hourly }}/h (~${{ (cost_report.total_hourly | float * 24) | round(2) }}/day if left running)"
+      - "Approximate on-demand pricing — excludes data transfer, load balancer"
+      - "LCU usage-based charges, and public IPs owned directly by load"
+      - "balancers (only allocated Elastic IPs are counted)."
+
+- name: "Warning: some prices couldn't be determined"
+  ansible.builtin.debug:
+    msg: >-
+      Missing on-demand price for: {{ cost_report.missing_prices | join(', ') }}
+      — those items are NOT included in the total above (counted as $0/h).
+  when: cost_report.missing_prices | length > 0

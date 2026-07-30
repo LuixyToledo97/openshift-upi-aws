@@ -1,0 +1,7 @@
+---
+# Standalone for now — composed into playbooks/deploy.yml.
+- name: ocplab finalize — CSR, CPMS, wait-for install-complete
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - finalize

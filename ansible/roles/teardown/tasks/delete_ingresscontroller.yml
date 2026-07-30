@@ -1,0 +1,18 @@
+---
+- name: Delete the default ingresscontroller (if the cluster responds)
+  kubernetes.core.k8s:
+    state: absent
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: operator.openshift.io/v1
+    kind: IngressController
+    name: default
+    namespace: openshift-ingress-operator
+  register: teardown_ingresscontroller
+  ignore_errors: true
+
+- name: Show the result
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'ingresscontroller deleted (or it did not exist)'
+         if not (teardown_ingresscontroller.failed | default(true))
+         else 'the cluster is not responding — the ELB will be cleaned up by hand if needed' }}

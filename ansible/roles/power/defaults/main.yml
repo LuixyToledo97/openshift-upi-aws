@@ -1,0 +1,19 @@
+---
+# CSR approval reuses the global ocplab_csr_approval_rounds /
+# ocplab_csr_round_wait_seconds (same vars 'finalize' uses) — a reboot's
+# kubelet cert renewal is the same shape of problem, no need for a second
+# set of knobs for the same concept.
+
+# How long to wait for EC2 instances to actually reach 'stopped' after
+# the in-guest shutdown command, and 'running' after starting them back
+# up — real polling, not a blind wait.
+power_stop_timeout: 300
+power_stop_poll_interval: 10
+power_start_timeout: 300
+power_start_poll_interval: 10
+
+# How long to wait for nodes to report Ready (via the Kubernetes API)
+# after their EC2 instance reaches 'running' — booting the OS + kubelet
+# + static pods takes longer than the EC2 state transition itself.
+power_ready_timeout: 900
+power_ready_poll_interval: 15

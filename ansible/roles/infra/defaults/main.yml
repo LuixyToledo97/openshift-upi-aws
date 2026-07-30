@@ -1,0 +1,9 @@
+---
+# present = terraform apply · absent = terraform destroy.
+infra_state: present
+
+# Specific resources to limit the operation to (equivalent to
+# -target=resource). Empty = the whole plan. Used, for example, by the
+# cluster_boot role to destroy just the bootstrap after it boots
+# (the README's terraform destroy -target=aws_instance.bootstrap).
+infra_targets: []

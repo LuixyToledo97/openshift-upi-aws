@@ -1,0 +1,10 @@
+{
+  "Name": "{{ safety_net_schedule_name }}",
+  "ScheduleExpression": "cron({{ ocplab_safety_net_killswitch_schedule }})",
+  "ScheduleExpressionTimezone": "{{ ocplab_safety_net_killswitch_timezone }}",
+  "FlexibleTimeWindow": {"Mode": "OFF"},
+  "Target": {
+    "Arn": "arn:aws:lambda:{{ ocplab_aws_region }}:{{ sn_caller.account }}:function:{{ safety_net_killswitch_function_name }}",
+    "RoleArn": "{{ sn_scheduler_role.iam_role.arn }}"
+  }
+}

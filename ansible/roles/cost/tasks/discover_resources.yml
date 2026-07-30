@@ -1,0 +1,75 @@
+---
+# Live AWS queries only — same "trust real state, not assumptions" idiom
+# as 'power'/'verify'/'teardown'. Includes the bootstrap instance/its
+# volume too (tag "<cluster>-bootstrap"): normally gone by the time a
+# cluster is up (cluster_boot destroys it), but if 'ocplab cost' runs
+# mid-deploy it should still be counted while it exists.
+
+- name: Find master/worker/bootstrap instances
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Name": "{{ ocplab_cluster_name }}-{{ item }}"
+      instance-state-name: ["running", "pending", "stopping", "stopped"]
+  loop:
+    - "master-*"
+    - "worker-*"
+    - "bootstrap"
+  register: cost_instance_queries
+
+- name: Combine all found instances into one list
+  ansible.builtin.set_fact:
+    cost_instances: "{{ cost_instance_queries.results | map(attribute='instances') | flatten }}"
+
+- name: Find the EBS volumes attached to those instances
+  amazon.aws.ec2_vol_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "attachment.instance-id": "{{ cost_instances | map(attribute='instance_id') | list }}"
+  register: cost_volumes_query
+  when: cost_instances | length > 0
+
+- name: Default to an empty volume list when nothing is deployed
+  ansible.builtin.set_fact:
+    cost_volumes: "{{ cost_volumes_query.volumes | default([]) }}"
+
+- name: Find NAT Gateways for this project
+  amazon.aws.ec2_vpc_nat_gateway_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Project": "{{ ocplab_project_tag }}"
+      state: ["available", "pending"]
+  register: cost_nat_gateways
+
+- name: Find Elastic IPs for this project
+  amazon.aws.ec2_eip_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Project": "{{ ocplab_project_tag }}"
+  register: cost_eips
+
+# No amazon.aws/community.aws module exists to list NLB/ALB (elbv2) — same
+# gap already documented in teardown/tasks/verify.yml, same fix (raw CLI).
+- name: Find v2 load balancers (NLB/ALB) for this cluster
+  ansible.builtin.command:
+    cmd: >-
+      aws elbv2 describe-load-balancers --profile {{ ocplab_aws_profile }}
+      --query "LoadBalancers[?contains(LoadBalancerName, '{{ ocplab_cluster_name }}')].LoadBalancerName"
+      --output json
+  environment:
+    AWS_DEFAULT_REGION: "{{ ocplab_aws_region }}"
+  register: cost_lbs_query
+  changed_when: false
+
+- name: Parse the load balancer list
+  ansible.builtin.set_fact:
+    cost_lbs: "{{ cost_lbs_query.stdout | from_json }}"
+
+- name: Fail fast if nothing is deployed at all
+  ansible.builtin.assert:
+    that: >-
+      (cost_instances | length > 0)
+      or (cost_nat_gateways.result | default([]) | length > 0)
+    fail_msg: >-
+      No billable resources found for '{{ ocplab_cluster_name }}' —
+      nothing deployed. Run 'ocplab deploy' first.

@@ -1,0 +1,51 @@
+import boto3
+
+TAG_KEY = "Project"
+TAG_VALUE = "{{ ocplab_project_tag }}"
+REGION = "{{ ocplab_aws_region }}"
+
+def lambda_handler(event, context):
+    ec2 = boto3.client("ec2", region_name=REGION)
+    elbv2 = boto3.client("elbv2", region_name=REGION)
+
+    # 1. Terminate tagged EC2 instances
+    instances = ec2.describe_instances(
+        Filters=[
+            {"Name": f"tag:{TAG_KEY}", "Values": [TAG_VALUE]},
+            {"Name": "instance-state-name", "Values": ["running", "stopped", "pending"]},
+        ]
+    )
+    instance_ids = [i["InstanceId"] for r in instances["Reservations"] for i in r["Instances"]]
+    if instance_ids:
+        ec2.terminate_instances(InstanceIds=instance_ids)
+        print(f"Terminated instances: {instance_ids}")
+
+    # 2. Delete tagged NAT Gateways
+    nats = ec2.describe_nat_gateways(
+        Filter=[
+            {"Name": f"tag:{TAG_KEY}", "Values": [TAG_VALUE]},
+            {"Name": "state", "Values": ["available"]},
+        ]
+    )
+    for nat in nats["NatGateways"]:
+        ec2.delete_nat_gateway(NatGatewayId=nat["NatGatewayId"])
+        print(f"Deleted NAT Gateway: {nat['NatGatewayId']}")
+
+    # 3. Delete tagged Load Balancers
+    lbs = elbv2.describe_load_balancers()
+    for lb in lbs["LoadBalancers"]:
+        tags = elbv2.describe_tags(ResourceArns=[lb["LoadBalancerArn"]])["TagDescriptions"][0]["Tags"]
+        if any(t["Key"] == TAG_KEY and t["Value"] == TAG_VALUE for t in tags):
+            elbv2.delete_load_balancer(LoadBalancerArn=lb["LoadBalancerArn"])
+            print(f"Deleted Load Balancer: {lb['LoadBalancerArn']}")
+
+    # 4. Release loose Elastic IPs (not associated with an instance)
+    addresses = ec2.describe_addresses(
+        Filters=[{"Name": f"tag:{TAG_KEY}", "Values": [TAG_VALUE]}]
+    )
+    for addr in addresses["Addresses"]:
+        if "InstanceId" not in addr:
+            ec2.release_address(AllocationId=addr["AllocationId"])
+            print(f"Released IP: {addr['PublicIp']}")
+
+    return {"status": "done", "instances_terminated": instance_ids}

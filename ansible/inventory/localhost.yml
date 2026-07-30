@@ -1,0 +1,8 @@
+---
+# Everything runs locally: Ansible orchestrates calls to the AWS/Terraform/
+# openshift-install CLIs — there are no remote nodes to manage over SSH.
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"

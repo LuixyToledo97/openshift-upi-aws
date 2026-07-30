@@ -1,0 +1,25 @@
+---
+- name: Query the configured RHCOS AMI
+  amazon.aws.ec2_ami_info:
+    profile: "{{ ocplab_aws_profile }}"
+    region: "{{ ocplab_aws_region }}"
+    image_ids: ["{{ ocplab_rhcos_ami }}"]
+  register: preflight_ami
+  ignore_errors: true
+
+- name: Record a problem if the AMI doesn't exist or isn't available
+  vars:
+    preflight_ami_state: "{{ preflight_ami.images[0].state | default('') }}"
+  ansible.builtin.set_fact:
+    preflight_problems: "{{ preflight_problems + [\"AMI: '\" + ocplab_rhcos_ami + \"' does not exist or is not available in \" + ocplab_aws_region + \" (\" + (preflight_ami.msg | default('state: ' + preflight_ami_state)) + \"). Update it in cluster.yaml with 'openshift-install coreos print-stream-json'.\"] }}"
+  when: >-
+    (preflight_ami.failed | default(true))
+    or (preflight_ami.images | default([]) | length == 0)
+    or (preflight_ami_state != 'available')
+
+- name: Show the AMI found
+  ansible.builtin.debug:
+    msg: "AMI {{ ocplab_rhcos_ami }}: {{ preflight_ami.images[0].name }} ({{ preflight_ami.images[0].state }})"
+  when:
+    - not (preflight_ami.failed | default(true))
+    - preflight_ami.images | default([]) | length > 0

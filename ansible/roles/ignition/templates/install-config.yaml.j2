@@ -1,0 +1,27 @@
+apiVersion: v1
+baseDomain: {{ ocplab_base_domain }}
+metadata:
+  name: {{ ocplab_cluster_name }}
+compute:
+- name: worker
+  # Always 0 in UPI: Terraform creates the workers, not the installer.
+  # Side effect: the masters stay schedulable (role master,worker).
+  replicas: 0
+controlPlane:
+  name: master
+  replicas: {{ ocplab_control_plane_replicas }}
+networking:
+  networkType: OVNKubernetes
+  clusterNetwork:
+  - cidr: {{ ocplab_cluster_network_cidr }}
+    hostPrefix: 23
+  serviceNetwork:
+  - {{ ocplab_service_network_cidr }}
+  machineNetwork:
+  - cidr: {{ ocplab_vpc_cidr }}
+platform:
+  aws:
+    region: {{ ocplab_aws_region }}
+publish: External
+pullSecret: {{ ignition_pull_secret_json }}
+sshKey: {{ ignition_ssh_key_json }}

@@ -1,0 +1,37 @@
+---
+- name: Get all ClusterOperators
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+  register: verify_cos
+
+# items2dict turns [{type: Available, status: 'True'}, ...] into
+# {Available: 'True', ...} — chosen over json_query/jmespath for this one
+# on purpose: approve_csr_round.yml already documents a jmespath negation
+# gotcha in this exact repo, and this check is negation-heavy (three
+# "must NOT be this value" conditions), so plain dict lookups are safer
+# and more readable here.
+- name: Record a problem for each unhealthy ClusterOperator
+  vars:
+    verify_co_conditions: "{{ item.status.conditions | items2dict(key_name='type', value_name='status') }}"
+  ansible.builtin.set_fact:
+    verify_problems: >-
+      {{ verify_problems + [
+        'ClusterOperator ' + item.metadata.name + ': Available=' + (verify_co_conditions.Available | default('?'))
+        + ' Progressing=' + (verify_co_conditions.Progressing | default('?'))
+        + ' Degraded=' + (verify_co_conditions.Degraded | default('?'))
+      ] }}
+  loop: "{{ verify_cos.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  when: >-
+    verify_co_conditions.Available | default('False') != 'True'
+    or verify_co_conditions.Progressing | default('True') != 'False'
+    or verify_co_conditions.Degraded | default('True') != 'False'
+
+- name: Show the ClusterOperators summary
+  vars:
+    verify_co_unhealthy_count: "{{ verify_problems | select('search', '^ClusterOperator ') | list | length }}"
+  ansible.builtin.debug:
+    msg: "{{ verify_cos.resources | length }} ClusterOperators checked, {{ verify_co_unhealthy_count }} unhealthy"

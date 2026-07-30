@@ -1,0 +1,52 @@
+---
+# Purely informational — doesn't fail the play, just reports what's left.
+- name: Remaining EC2 instances with the Project tag
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Project": "{{ ocplab_project_tag }}"
+      instance-state-name: ["running", "pending", "stopping", "stopped"]
+  register: teardown_verify_instances
+
+- name: Remaining NAT Gateways with the Project tag
+  amazon.aws.ec2_vpc_nat_gateway_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Project": "{{ ocplab_project_tag }}"
+      state: ["available", "pending"]
+  register: teardown_verify_nats
+
+- name: Remaining Elastic IPs with the Project tag
+  amazon.aws.ec2_eip_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Project": "{{ ocplab_project_tag }}"
+  register: teardown_verify_eips
+
+# No amazon.aws/community.aws module exists to list NLB/ALB (elbv2) — use
+# the CLI directly, it's read-only.
+- name: v2 load balancers (NLB/ALB) containing the cluster's name
+  ansible.builtin.command:
+    cmd: >-
+      aws elbv2 describe-load-balancers --profile {{ ocplab_aws_profile }}
+      --query "LoadBalancers[?contains(LoadBalancerName, '{{ ocplab_cluster_name }}')].LoadBalancerName"
+      --output text
+  environment:
+    AWS_DEFAULT_REGION: "{{ ocplab_aws_region }}"
+  register: teardown_verify_nlbs
+  changed_when: false
+
+- name: Final verification summary
+  vars:
+    teardown_nothing_left: >-
+      {{ teardown_verify_instances.instances | length == 0
+         and teardown_verify_nats.result | default([]) | length == 0
+         and teardown_verify_eips.addresses | length == 0
+         and (teardown_verify_nlbs.stdout | default('') | trim) == '' }}
+  ansible.builtin.debug:
+    msg:
+      - "EC2 instances: {{ teardown_verify_instances.instances | length }}"
+      - "NAT Gateways: {{ teardown_verify_nats.result | default([]) | length }}"
+      - "Elastic IPs: {{ teardown_verify_eips.addresses | length }}"
+      - "Remaining v2 load balancers: '{{ teardown_verify_nlbs.stdout | default('') }}'"
+      - "{{ 'All clean, nothing billing.' if (teardown_nothing_left | bool) else 'Resources remain — check the detail above.' }}"

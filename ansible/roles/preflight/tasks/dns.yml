@@ -1,0 +1,43 @@
+---
+- name: Read the public hosted zone in Route53
+  amazon.aws.route53_info:
+    profile: "{{ ocplab_aws_profile }}"
+    query: hosted_zone
+    hosted_zone_method: details
+    hosted_zone_id: "{{ ocplab_route53_public_zone_id }}"
+  register: preflight_zone
+  ignore_errors: true
+
+- name: Record a problem if the hosted zone couldn't be read
+  ansible.builtin.set_fact:
+    preflight_problems: "{{ preflight_problems + ['DNS: could not read hosted zone ' + ocplab_route53_public_zone_id + ' (' + (preflight_zone.msg | default('unknown error')) + ')'] }}"
+  when: preflight_zone.failed | default(true)
+
+- name: Check that the hosted zone matches the configured baseDomain
+  vars:
+    preflight_zone_name: "{{ preflight_zone.HostedZone.Name | default('') }}"
+  ansible.builtin.set_fact:
+    preflight_problems: "{{ preflight_problems + [\"DNS: hosted zone \" + ocplab_route53_public_zone_id + \" is '\" + preflight_zone_name + \"', not '\" + ocplab_base_domain + \".' — check platform.aws.publicHostedZoneId in cluster.yaml\"] }}"
+  when:
+    - not (preflight_zone.failed | default(true))
+    - preflight_zone_name != (ocplab_base_domain ~ '.')
+
+# Compares what Route53 says it delegated (DelegationSet) against what the
+# public DNS actually resolves to — if the registrar (Cloudflare) doesn't
+# have the correct 4 NS records, this check is the only way to find out
+# before launching the deployment (see README §2.4).
+- name: Query the real public NS delegation
+  ansible.builtin.set_fact:
+    preflight_public_ns: "{{ query('community.general.dig', ocplab_base_domain + './NS') | map('regex_replace', '\\.$', '') | sort | list }}"
+  when: not (preflight_zone.failed | default(true))
+  ignore_errors: true
+
+- name: Record a problem if the NS delegation doesn't match
+  vars:
+    preflight_aws_ns: "{{ (preflight_zone.DelegationSet.NameServers | default([])) | map('regex_replace', '\\.$', '') | sort | list }}"
+  ansible.builtin.set_fact:
+    preflight_problems: "{{ preflight_problems + ['DNS: the public delegation of ' + ocplab_base_domain + ' (' + (preflight_public_ns | default([]) | join(', ')) + ') does not match the hosted zone NS records (' + (preflight_aws_ns | join(', ')) + ') — check the NS records at the registrar (see README §2.4)'] }}"
+  when:
+    - not (preflight_zone.failed | default(true))
+    - preflight_public_ns is defined
+    - preflight_public_ns != preflight_aws_ns

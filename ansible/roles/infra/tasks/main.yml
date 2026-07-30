@@ -1,0 +1,24 @@
+---
+# infra: thin layer over community.general.terraform. terraform.tfvars was
+# already written by `ocplab render` — Terraform loads it purely by
+# naming convention, no need to pass it via variables_files.
+#
+# No business logic here: the module already has real check_mode support
+# (with --check it runs "terraform plan" / "terraform plan -destroy",
+# without touching anything) and confirmation is the CLI layer's (ocplab)
+# responsibility, not this role's.
+
+- name: "Terraform {{ 'apply' if infra_state == 'present' else 'destroy' }} in {{ ocplab_terraform_dir }}"
+  community.general.terraform:
+    project_path: "{{ ocplab_terraform_dir }}"
+    state: "{{ infra_state }}"
+    targets: "{{ infra_targets }}"
+    force_init: true
+  register: infra_result
+
+- name: Show the result
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'no changes' if not infra_result.changed
+         else ('would apply' if ansible_check_mode else 'applied') }}
+      — command: {{ infra_result.command }}

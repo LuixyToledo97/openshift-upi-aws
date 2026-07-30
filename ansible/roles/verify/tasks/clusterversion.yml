@@ -1,0 +1,43 @@
+---
+# Secondary connectivity gate — main.yml already does a fast, bounded TCP
+# reachability check before this role gets anywhere near here, which
+# catches the common "cluster powered off/destroyed" case quickly (the
+# Kubernetes client used below has no connection-timeout of its own and
+# can hang far longer). This one stays as defense in depth for a
+# different failure mode: the TCP port responds but the API call itself
+# still errors (cert trust issues, auth problems, etc.) — still gated
+# hard here (see main.yml's import order) so nodes.yml/clusteroperators.yml
+# never have to handle "API unreachable" themselves either way.
+- name: Get the ClusterVersion
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: verify_cv
+  ignore_errors: true
+
+- name: Fail fast if the cluster API isn't reachable at all
+  ansible.builtin.assert:
+    that: not verify_cv.failed
+    fail_msg: >-
+      Couldn't reach the cluster API ({{ verify_cv.msg | default('connection failed') }}).
+      Check 'ocplab status' (is anything actually deployed?) or run 'ocplab deploy'.
+
+- name: Extract its conditions and desired version
+  ansible.builtin.set_fact:
+    verify_cv_conditions: "{{ verify_cv.resources[0].status.conditions | items2dict(key_name='type', value_name='status') }}"
+    verify_cv_desired: "{{ verify_cv.resources[0].status.desired.version | default('unknown') }}"
+  when: verify_cv.resources | default([]) | length > 0
+
+- name: Record a problem if the cluster isn't Available
+  ansible.builtin.set_fact:
+    verify_problems: "{{ verify_problems + ['ClusterVersion: not Available (' + (verify_cv_conditions | default({})) | string + ')'] }}"
+  when: >-
+    (verify_cv.resources | default([]) | length == 0)
+    or (verify_cv_conditions.Available | default('False') != 'True')
+
+- name: Show the ClusterVersion status
+  ansible.builtin.debug:
+    msg: "version={{ verify_cv_desired | default('unknown') }} Available={{ verify_cv_conditions.Available | default('unknown') }}"
+  when: verify_cv.resources | default([]) | length > 0

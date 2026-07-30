@@ -1,0 +1,6 @@
+---
+- name: ocplab destroy — ordered teardown of the cluster
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - teardown

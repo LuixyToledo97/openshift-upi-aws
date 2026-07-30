@@ -1,0 +1,6 @@
+---
+- name: ocplab bootstrap — AWS prerequisites (IAM user, hosted zone, SSH key)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - bootstrap

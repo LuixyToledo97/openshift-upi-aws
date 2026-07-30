@@ -1,0 +1,59 @@
+---
+# Read-only: just reports the AWS-side power state of the master/worker
+# instances found by main.yml (power_master_instances/power_worker_instances)
+# — no cordon/drain/shutdown, no kubeconfig/kubectl calls. Deliberately
+# scoped to EC2 instance state only, not cluster health — 'ocplab verify'
+# already owns "is the cluster healthy", this only answers "is it on or
+# off" (the question 'ocplab status' points here for).
+
+- name: Collect master/worker instance states
+  ansible.builtin.set_fact:
+    power_master_states: "{{ power_master_instances.instances | map(attribute='state.name') | list }}"
+    power_worker_states: "{{ power_worker_instances.instances | map(attribute='state.name') | list }}"
+
+- name: Combine both groups into one list
+  ansible.builtin.set_fact:
+    power_all_states: "{{ power_master_states + power_worker_states }}"
+
+- name: "Status: masters"
+  ansible.builtin.debug:
+    msg: >-
+      Masters: {{ power_master_states | length }} instance(s)
+      — {{ power_master_states | join(', ') if power_master_states | length > 0 else 'none found' }}
+
+- name: "Status: workers"
+  ansible.builtin.debug:
+    msg: >-
+      Workers: {{ power_worker_states | length }} instance(s)
+      — {{ power_worker_states | join(', ') if power_worker_states | length > 0 else 'none found' }}
+
+# Computed as a separate fact (not inline in the debug message below) to
+# keep the Jinja simple — a nested ternary mixing '+' and '|' in one
+# expression is exactly the kind of thing that silently misparses
+# (operator precedence: '|' binds tighter than '+') instead of erroring
+# loudly, so it's split into deliberate steps here.
+- name: Determine the overall power verdict
+  ansible.builtin.set_fact:
+    power_verdict: >-
+      {{ 'ON' if power_all_states | unique == ['running']
+         else ('OFF' if power_all_states | unique == ['stopped']
+         else 'MIXED') }}
+
+# Single verdict at the end, same reasoning as the safety-net status
+# summary and the bootstrap NS-delegation notice: one clear line beats
+# reading two lists of per-instance states.
+- name: "Status: summary"
+  ansible.builtin.debug:
+    msg: >-
+      {{ {
+        'ON': 'Power: ON (' + (power_all_states | length | string) + ' instance(s) running)',
+        'OFF': (
+          'Power: OFF (' + (power_all_states | length | string) + ' instance(s) stopped) — '
+          + 'still billing for EBS, staying off longer than a redeploy takes costs MORE than '
+          + "'ocplab destroy' + 'ocplab deploy'"
+        ),
+        'MIXED': (
+          "Power: MIXED (" + (power_all_states | join(', ')) + ") — run 'ocplab power on' "
+          + 'to finish starting it, or check the AWS console'
+        ),
+      }[power_verdict] }}

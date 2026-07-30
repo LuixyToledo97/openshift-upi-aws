@@ -1,0 +1,6 @@
+---
+- name: ocplab ignition — generate/regenerate install-dir and the Ignition configs
+  hosts: localhost
+  gather_facts: true
+  roles:
+    - ignition

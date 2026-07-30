@@ -1,0 +1,12 @@
+---
+# Playbook for testing the infra role directly — it's NOT wired to any
+# ocplab command on its own (that arrived with deploy/destroy once
+# cluster_boot/finalize/teardown also existed to compose the full flow).
+# In the meantime it's invoked by hand:
+#   ansible-playbook playbooks/infra.yml --check --diff
+#   ansible-playbook playbooks/infra.yml --check --diff -e infra_state=absent
+- name: ocplab infra — terraform apply/destroy
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - infra

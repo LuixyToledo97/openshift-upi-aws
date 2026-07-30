@@ -1,0 +1,82 @@
+---
+- name: Ensure the archive directory exists
+  ansible.builtin.file:
+    path: "{{ ocplab_archive_dir }}"
+    state: directory
+    mode: "0700"
+  when: ignition_metadata_stat.stat.exists
+
+- name: Archive the previous install-dir
+  ansible.builtin.command:
+    cmd: >-
+      mv {{ ocplab_install_dir }}
+      {{ ocplab_archive_dir }}/install-dir-old-{{ ansible_date_time.date | replace('-', '') }}-{{ ansible_date_time.time | replace(':', '') }}
+  when: ignition_metadata_stat.stat.exists
+
+- name: Create a clean install-dir
+  ansible.builtin.file:
+    path: "{{ ocplab_install_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Read the pull secret
+  ansible.builtin.slurp:
+    src: "{{ ocplab_pull_secret_file }}"
+  register: ignition_pull_secret_raw
+  no_log: true
+
+- name: Read the SSH public key
+  ansible.builtin.slurp:
+    src: "{{ ocplab_ssh_public_key_file }}"
+  register: ignition_ssh_key_raw
+
+# install-config.yaml expects pullSecret as a STRING whose CONTENT is
+# JSON, not as an embedded YAML object. If this did from_json | to_json,
+# to_json would re-serialize it as an object ({...} without quotes)
+# instead of as a string, and openshift-install would fail with "cannot
+# unmarshal object into ... pullSecret of type string". That's why the
+# raw text is left as-is and only to_json is applied, to quote/escape it
+# as a string.
+- name: Prepare the pull secret and SSH key for the install-config
+  ansible.builtin.set_fact:
+    ignition_pull_secret_json: "{{ (ignition_pull_secret_raw.content | b64decode | trim) | to_json }}"
+    ignition_ssh_key_json: "{{ (ignition_ssh_key_raw.content | b64decode | trim) | to_json }}"
+  no_log: true
+
+- name: Generate install-config.yaml
+  ansible.builtin.template:
+    src: install-config.yaml.j2
+    dest: "{{ ocplab_install_dir }}/install-config.yaml"
+    mode: "0600"
+  diff: false
+
+# openshift-install needs AWS_PROFILE in the environment — it doesn't
+# accept --profile (it uses the AWS SDK directly). See README §2.1.
+- name: Generate the manifests (consumes and deletes install-config.yaml)
+  ansible.builtin.command:
+    cmd: "openshift-install create manifests --dir={{ ocplab_install_dir }}"
+  environment:
+    AWS_PROFILE: "{{ ocplab_aws_profile }}"
+
+- name: Generate the Ignition configs
+  ansible.builtin.command:
+    cmd: "openshift-install create ignition-configs --dir={{ ocplab_install_dir }}"
+  environment:
+    AWS_PROFILE: "{{ ocplab_aws_profile }}"
+
+- name: Read the generated infraID
+  ansible.builtin.slurp:
+    src: "{{ ocplab_install_dir }}/metadata.json"
+  register: ignition_metadata_new
+  when: not ansible_check_mode
+
+- name: Show the result
+  when: not ansible_check_mode
+  vars:
+    ignition_infra_id: "{{ (ignition_metadata_new.content | b64decode | from_json).infraID }}"
+  ansible.builtin.debug:
+    msg: >-
+      install-dir regenerated. infraID={{ ignition_infra_id }} — certificates
+      valid for {{ ocplab_ignition_max_age_hours }}h from now. The infraID
+      changed from the previous one: the next 'terraform apply' will pick up
+      the new tags automatically (providers.tf reads it from metadata.json).

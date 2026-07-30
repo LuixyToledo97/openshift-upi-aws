@@ -1,0 +1,94 @@
+---
+# safety_net: ports safety-net/*.sh + safety-net/**/*.json into a single
+# idempotent role with three modes (ocplab_safety_net_action):
+#   apply   — create/ensure, in dependency order
+#   destroy — tear down, in the exact REVERSE order of cleanup-safety-net.sh
+#   status  — only report, without touching anything
+#
+# Resources that have their own Ansible module (iam_managed_policy,
+# iam_role, iam_policy, lambda, lambda_policy) are already idempotent on
+# their own: for 'status' they get check_mode forced onto them via the
+# variable below, so "apply" under check_mode == "would this need to be
+# created?" == status, without duplicating the resource definition in two
+# places. IMPORTANT: for 'apply'/'destroy' check_mode is left untouched
+# ("omit") so it still respects the ambient --check (ocplab --dry-run) —
+# only 'status' forces it, always, no matter what.
+#
+# Resources WITHOUT a module (Budget, Budget Action, EventBridge Schedule)
+# have no native check_mode: they're checked by hand with a "describe"/
+# "get" (read-only, forced with check_mode:false since it's harmless)
+# before deciding whether to create/delete them.
+
+- name: Get the AWS account ID
+  amazon.aws.aws_caller_info:
+    profile: "{{ ocplab_aws_profile }}"
+  register: sn_caller
+  check_mode: false
+
+- name: Temporary directory for JSON payloads and the Lambda package
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: ocplab-safety-net-
+  register: sn_tmp_dir
+  when: ocplab_safety_net_action in ['apply', 'status']
+  check_mode: false
+
+- name: "apply: create/ensure (dependency order)"
+  when: ocplab_safety_net_action == 'apply'
+  block:
+    - ansible.builtin.import_tasks: deny_policy.yml
+    - ansible.builtin.import_tasks: budget.yml
+    - ansible.builtin.import_tasks: budget_action.yml
+    - ansible.builtin.import_tasks: killswitch.yml
+    - ansible.builtin.import_tasks: scheduler.yml
+
+- name: "destroy: tear down (reverse order)"
+  when: ocplab_safety_net_action == 'destroy'
+  block:
+    - ansible.builtin.import_tasks: scheduler.yml
+    - ansible.builtin.import_tasks: killswitch.yml
+    - ansible.builtin.import_tasks: budget_action.yml
+    - ansible.builtin.import_tasks: budget.yml
+    - ansible.builtin.import_tasks: deny_policy.yml
+
+- name: "status: report without touching anything"
+  when: ocplab_safety_net_action == 'status'
+  block:
+    - ansible.builtin.import_tasks: deny_policy.yml
+    - ansible.builtin.import_tasks: budget.yml
+    - ansible.builtin.import_tasks: budget_action.yml
+    - ansible.builtin.import_tasks: killswitch.yml
+    - ansible.builtin.import_tasks: scheduler.yml
+
+    # One line at the end, after the 5 per-resource "Status: ..." messages
+    # above — same UX fix already applied to bootstrap's NS-delegation
+    # notice: a scattered detail per resource is easy to skim past, a
+    # single yes/no/partial verdict at the end isn't. Built from the same
+    # signals each resource's own debug message already uses, so it can
+    # never disagree with them.
+    - name: Count how many of the 5 components exist
+      ansible.builtin.set_fact:
+        sn_components_present: >-
+          {{
+            [not sn_deny_policy.changed,
+             sn_budget_check.rc == 0,
+             sn_budget_action_exists,
+             not sn_killswitch_lambda.changed,
+             sn_schedule_check.rc == 0]
+            | select | list | length
+          }}
+
+    - name: "Status: summary"
+      ansible.builtin.debug:
+        msg: >-
+          Safety net:
+          {{ 'FULLY DEPLOYED (5/5)' if sn_components_present | int == 5
+             else ('NOT DEPLOYED (0/5)' if sn_components_present | int == 0
+             else 'PARTIALLY DEPLOYED (' + (sn_components_present | string) + '/5 — see details above)') }}
+
+- name: Clean up the temporary directory
+  ansible.builtin.file:
+    path: "{{ sn_tmp_dir.path }}"
+    state: absent
+  when: sn_tmp_dir is defined and sn_tmp_dir.path is defined
+  check_mode: false

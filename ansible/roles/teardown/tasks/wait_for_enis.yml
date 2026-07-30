@@ -1,0 +1,36 @@
+---
+# Only ELB-owned interfaces matter here: the cluster's own instances are
+# still up at this point (they get destroyed later, in Step 5/5), so a
+# "wait for ALL of the VPC's ENIs to reach zero" condition could never
+# converge and would always burn the full timeout regardless of the real
+# blocker. AWS tags every interface it creates for a Classic ELB with
+# requester-id=amazon-elb, which lets this poll target only the ENIs that
+# actually block subnet/IGW/VPC deletion.
+- name: Real poll until the ELB's ENIs free up
+  amazon.aws.ec2_eni_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      vpc-id: "{{ teardown_vpc_id }}"
+      requester-id: amazon-elb
+  register: teardown_eni_poll
+  until: (teardown_eni_poll.network_interfaces | default([])) | length == 0
+  retries: "{{ (ocplab_eni_teardown_timeout / ocplab_elb_teardown_poll_interval) | int }}"
+  delay: "{{ ocplab_elb_teardown_poll_interval }}"
+  ignore_errors: true
+
+# Any ENIs still around at this point are usually still genuinely
+# "attached" to the (already deleted) ELB — AWS releases them in the
+# background on its own timeline, which found running this for real can
+# take well over the old 180s default. A delete attempt while still
+# attached always fails cleanly (ignore_errors) and costs nothing; it
+# only helps the rare case where AWS detached it between the last poll
+# and here.
+- name: Try to manually delete the ENIs that didn't free up on their own
+  amazon.aws.ec2_eni:
+    profile: "{{ ocplab_aws_profile }}"
+    eni_id: "{{ item.network_interface_id }}"
+    state: absent
+  loop: "{{ teardown_eni_poll.network_interfaces | default([]) }}"
+  loop_control:
+    label: "{{ item.network_interface_id }}"
+  ignore_errors: true

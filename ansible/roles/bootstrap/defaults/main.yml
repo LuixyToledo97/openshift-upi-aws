@@ -1,0 +1,10 @@
+---
+bootstrap_iam_managed_policies:
+  - arn:aws:iam::aws:policy/AdministratorAccess
+
+# Profile that's ALREADY authenticated, used ONCE to create the IAM user
+# above (chicken-and-egg: creating your working credentials requires some
+# prior credentials). Overridden with 'ocplab bootstrap
+# --admin-profile <profile>'. If the target profile (platform.aws.profile
+# in cluster.yaml) already works, this value is never used.
+bootstrap_admin_profile: default

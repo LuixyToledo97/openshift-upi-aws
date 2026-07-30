@@ -1,0 +1,53 @@
+---
+# power: on/off/status for the cluster's masters+workers. on/off is a
+# cheaper-than-staying-up (but NOT actually cheap: stopped EC2 instances
+# still bill for their EBS volumes, and it costs MORE to leave the
+# cluster stopped overnight than to 'ocplab destroy' + redeploy from
+# scratch) alternative to destroy, offered as an option alongside it, not
+# a replacement. Real checks throughout — no blind waits — same
+# philosophy as every other role here. status is read-only, answering
+# "is it currently on or off" — 'ocplab status' points here for it.
+#
+# Node targeting is AWS tag-based (Name = "<cluster_name>-master-N" /
+# "-worker-N", set by ec2.tf), and the EC2 instance's own
+# private_dns_name is used directly as the Kubernetes node name (that's
+# what OpenShift names nodes on AWS) — ties "which EC2 instance" and
+# "which k8s node" to the same source of truth instead of cross-matching
+# two independent lookups.
+
+- name: Find the master instances
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Name": "{{ ocplab_cluster_name }}-master-*"
+      instance-state-name: ["running", "pending", "stopping", "stopped"]
+  register: power_master_instances
+
+- name: Find the worker instances
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Name": "{{ ocplab_cluster_name }}-worker-*"
+      instance-state-name: ["running", "pending", "stopping", "stopped"]
+  register: power_worker_instances
+
+- name: Fail fast if nothing is deployed
+  ansible.builtin.assert:
+    that: >-
+      (power_master_instances.instances | length > 0)
+      or (power_worker_instances.instances | length > 0)
+    fail_msg: >-
+      No master/worker instances found for '{{ ocplab_cluster_name }}' —
+      nothing deployed yet. Run 'ocplab deploy' first.
+
+- name: "off: shut down the cluster gracefully"
+  when: ocplab_power_action == 'off'
+  ansible.builtin.import_tasks: off.yml
+
+- name: "on: power the cluster back up"
+  when: ocplab_power_action == 'on'
+  ansible.builtin.import_tasks: on.yml
+
+- name: "status: report the current power state, without touching anything"
+  when: ocplab_power_action == 'status'
+  ansible.builtin.import_tasks: status.yml

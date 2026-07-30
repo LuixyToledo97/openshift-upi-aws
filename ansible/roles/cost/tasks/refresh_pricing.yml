@@ -1,0 +1,202 @@
+---
+# Populates cost_final_prices (a flat {key: "0.123"} dict for the
+# configured region) — from the local cache if fresh and complete, else
+# by querying the AWS Pricing API and updating the cache. Lazy and
+# per-region: only the region actually configured in cluster.yaml ever
+# gets priced/cached, never all ~30 AWS regions up front.
+#
+# '--region us-east-1' below is NOT a mistake or a copy-paste leftover —
+# the AWS Pricing API (Price List Query API) only has an endpoint in
+# us-east-1 (and ap-south-1), regardless of which region is actually
+# being priced. The real target region is the 'location' FILTER value
+# (cost_location_name, e.g. "EU (Ireland)"), not the --region flag.
+#
+# '--no-paginate --max-results 20' is load-bearing, not decoration:
+# without it the CLI auto-paginates through the ENTIRE result set for a
+# filter (some product families, e.g. NAT Gateway, have dozens of pricing
+# dimensions/legacy SKUs) — only the first page is ever used
+# (extract_price.py takes the first match), so there was never a reason
+# to fetch more than one bounded page.
+#
+# 'timeout 20' in front of every call is a second, independent safety
+# net: found live that a Pricing API call can hang far past what
+# --no-paginate/--max-results alone bound (near-zero CPU while stuck —
+# a network-level hang, not runaway pagination) — an external network
+# call with no reliable bounded timeout of its own is exactly the same
+# class of problem already fixed in verify's API-reachability check, and
+# gets the same fix: wrap it with an explicit outer timeout so a hang
+# fails in seconds instead of indefinitely. failed_when: false lets a
+# timed-out fetch degrade to "price unknown" (see missing_prices in the
+# final report) rather than aborting the whole 'ocplab cost' run.
+#
+# Every '--filters "..." "..." "..."' continuation below MUST stay at
+# the SAME indentation as the rest of the '>-' block, never deeper (even
+# though deeper looks more readable). Found the hard way: a YAML folded
+# block scalar only folds lines at the SAME indentation into one
+# space-joined line — a MORE-indented line (e.g. aligning it under the
+# opening quote for readability) is kept as a literal, separately-newlined
+# chunk instead. That silently split one shell command into several
+# newline-separated ones, so only the FIRST --filters value ever actually
+# reached 'aws pricing' — location/productFamily silently never applied,
+# which is how a "EU (Ireland)" query came back with Singapore data.
+
+- name: Resolve the Pricing API location name for this region
+  ansible.builtin.set_fact:
+    cost_location_name: "{{ cost_region_location_names[ocplab_aws_region] | default('') }}"
+
+- name: Fail if the region isn't in the location-name map
+  ansible.builtin.assert:
+    that: cost_location_name | length > 0
+    fail_msg: >-
+      No Pricing API location name known for region '{{ ocplab_aws_region }}'
+      — add it to cost_region_location_names in
+      ansible/roles/cost/defaults/main.yml (AWS doesn't expose an API to
+      translate a region code into the Pricing API's human-readable
+      location name, so this map has to be hardcoded).
+
+- name: Determine which instance/volume types are actually in use
+  ansible.builtin.set_fact:
+    cost_needed_instance_types: "{{ cost_instances | map(attribute='instance_type') | unique | list }}"
+    cost_needed_volume_types: "{{ cost_volumes | map(attribute='type') | unique | list }}"
+
+- name: Check whether the pricing cache file exists
+  ansible.builtin.stat:
+    path: "{{ cost_pricing_cache_file | expanduser }}"
+  register: cost_cache_stat
+
+- name: Read the existing pricing cache, if any
+  ansible.builtin.set_fact:
+    cost_cache: "{{ (lookup('file', cost_pricing_cache_file | expanduser) | from_json) if cost_cache_stat.stat.exists else {} }}"
+
+- name: Extract this region's cached entry, if any
+  ansible.builtin.set_fact:
+    cost_region_cache: "{{ cost_cache[ocplab_aws_region] | default({}) }}"
+
+- name: Determine whether the cached prices are fresh AND cover everything currently deployed
+  vars:
+    cost_cache_age_hours: "{{ ((now(utc=true, fmt='%s') | int) - (cost_region_cache.fetched_at | default(0) | int)) / 3600 }}"
+    cost_needed_keys: >-
+      {{ (cost_needed_instance_types | map('regex_replace', '^(.*)$', 'ec2:\1') | list)
+         + (cost_needed_volume_types | map('regex_replace', '^(.*)$', 'ebs:\1') | list)
+         + ['nat_gateway_hour', 'nlb_hour', 'public_ipv4_hour'] }}
+  ansible.builtin.set_fact:
+    cost_cache_fresh: >-
+      {{ (cost_cache_age_hours | float < cost_pricing_cache_max_age_hours | float)
+         and (cost_needed_keys | difference(cost_region_cache.prices | default({}) | list) | length == 0) }}
+
+# --- Everything below only runs when the cache is stale/incomplete ---
+
+- name: "Fetch EC2 on-demand pricing for: {{ cost_needed_instance_types | join(', ') }}"
+  ansible.builtin.shell: >-
+    timeout 20 aws pricing get-products --profile {{ ocplab_aws_profile }} --region us-east-1
+    --service-code AmazonEC2
+    --filters "Type=TERM_MATCH,Field=instanceType,Value={{ item }}"
+    "Type=TERM_MATCH,Field=location,Value={{ cost_location_name }}"
+    "Type=TERM_MATCH,Field=operatingSystem,Value=Linux"
+    "Type=TERM_MATCH,Field=tenancy,Value=Shared"
+    "Type=TERM_MATCH,Field=preInstalledSw,Value=NA"
+    "Type=TERM_MATCH,Field=capacitystatus,Value=Used"
+    --no-paginate --max-results 20 --output json
+    | python3 {{ role_path }}/files/extract_price.py --unit Hrs
+  loop: "{{ cost_needed_instance_types }}"
+  register: cost_ec2_price_results
+  changed_when: false
+  failed_when: false
+  when: not cost_cache_fresh
+
+- name: "Fetch EBS on-demand pricing for: {{ cost_needed_volume_types | join(', ') }}"
+  ansible.builtin.shell: >-
+    timeout 20 aws pricing get-products --profile {{ ocplab_aws_profile }} --region us-east-1
+    --service-code AmazonEC2
+    --filters "Type=TERM_MATCH,Field=volumeApiName,Value={{ item }}"
+    "Type=TERM_MATCH,Field=location,Value={{ cost_location_name }}"
+    "Type=TERM_MATCH,Field=productFamily,Value=Storage"
+    --no-paginate --max-results 20 --output json
+    | python3 {{ role_path }}/files/extract_price.py --unit GB-Mo
+  loop: "{{ cost_needed_volume_types }}"
+  register: cost_ebs_price_results
+  changed_when: false
+  failed_when: false
+  when: not cost_cache_fresh
+
+- name: Fetch NAT Gateway on-demand hourly pricing
+  ansible.builtin.shell: >-
+    timeout 20 aws pricing get-products --profile {{ ocplab_aws_profile }} --region us-east-1
+    --service-code AmazonEC2
+    --filters "Type=TERM_MATCH,Field=location,Value={{ cost_location_name }}"
+    "Type=TERM_MATCH,Field=productFamily,Value=NAT Gateway"
+    --no-paginate --max-results 20 --output json
+    | python3 {{ role_path }}/files/extract_price.py --unit Hrs --description-contains "NAT Gateway Hour"
+  register: cost_nat_price_result
+  changed_when: false
+  failed_when: false
+  when: not cost_cache_fresh
+
+- name: Fetch Network Load Balancer on-demand hourly pricing
+  ansible.builtin.shell: >-
+    timeout 20 aws pricing get-products --profile {{ ocplab_aws_profile }} --region us-east-1
+    --service-code AWSELB
+    --filters "Type=TERM_MATCH,Field=location,Value={{ cost_location_name }}"
+    "Type=TERM_MATCH,Field=productFamily,Value=Load Balancer-Network"
+    --no-paginate --max-results 20 --output json
+    | python3 {{ role_path }}/files/extract_price.py --unit Hrs --description-contains "LoadBalancer-hour"
+  register: cost_nlb_price_result
+  changed_when: false
+  failed_when: false
+  when: not cost_cache_fresh
+
+- name: Fetch public IPv4 address on-demand hourly pricing
+  ansible.builtin.shell: >-
+    timeout 20 aws pricing get-products --profile {{ ocplab_aws_profile }} --region us-east-1
+    --service-code AmazonVPC
+    --filters "Type=TERM_MATCH,Field=location,Value={{ cost_location_name }}"
+    --no-paginate --max-results 20 --output json
+    | python3 {{ role_path }}/files/extract_price.py --unit Hrs --description-contains "In-use public IPv4 address"
+  register: cost_public_ipv4_price_result
+  changed_when: false
+  failed_when: false
+  when: not cost_cache_fresh
+
+- name: Build the freshly-fetched price table
+  ansible.builtin.set_fact:
+    cost_fetched_prices: >-
+      {{
+        dict(cost_needed_instance_types | map('regex_replace', '^(.*)$', 'ec2:\1') | list
+             | zip(cost_ec2_price_results.results | map(attribute='stdout') | map('trim') | list))
+        | combine(dict(cost_needed_volume_types | map('regex_replace', '^(.*)$', 'ebs:\1') | list
+             | zip(cost_ebs_price_results.results | map(attribute='stdout') | map('trim') | list)))
+        | combine({
+            'nat_gateway_hour': cost_nat_price_result.stdout | default('') | trim,
+            'nlb_hour': cost_nlb_price_result.stdout | default('') | trim,
+            'public_ipv4_hour': cost_public_ipv4_price_result.stdout | default('') | trim,
+          })
+      }}
+  when: not cost_cache_fresh
+
+- name: Drop any price that failed to fetch (empty string) rather than caching a blank
+  ansible.builtin.set_fact:
+    cost_fetched_prices: "{{ cost_fetched_prices | dict2items | rejectattr('value', 'equalto', '') | items2dict }}"
+  when: not cost_cache_fresh
+
+- name: Merge into the cache and write it back (other regions untouched)
+  vars:
+    cost_updated_region_entry:
+      fetched_at: "{{ now(utc=true, fmt='%s') }}"
+      location_name: "{{ cost_location_name }}"
+      prices: "{{ (cost_region_cache.prices | default({})) | combine(cost_fetched_prices) }}"
+  ansible.builtin.copy:
+    content: "{{ (cost_cache | combine({ocplab_aws_region: cost_updated_region_entry})) | to_nice_json }}"
+    dest: "{{ cost_pricing_cache_file | expanduser }}"
+    mode: "0600"
+  register: cost_cache_write
+  when: not cost_cache_fresh
+
+# Short-circuiting ternary (same reasoning as elsewhere in this repo):
+# when cost_cache_fresh is true, the 'if' branch is never evaluated, so
+# cost_updated_region_entry (only set above under 'when: not
+# cost_cache_fresh') never needs to exist.
+- name: Determine the final price table to use for this run
+  ansible.builtin.set_fact:
+    cost_final_prices: >-
+      {{ ((cost_region_cache.prices | default({})) | combine(cost_fetched_prices | default({})))
+         if not cost_cache_fresh else cost_region_cache.prices | default({}) }}

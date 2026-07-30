@@ -1,0 +1,36 @@
+---
+# ignition: generates install-dir/ (install-config.yaml -> manifests ->
+# Ignition configs) from cluster.yaml. Idempotent based on age: if
+# install-dir already exists and is younger than
+# ocplab_ignition_max_age_hours, it's left alone — regenerating changes
+# the infraID and forces a fresh terraform apply. Decision already made,
+# see CLAUDE.md.
+
+- name: Check whether a generated install-dir already exists
+  ansible.builtin.stat:
+    path: "{{ ocplab_install_dir }}/metadata.json"
+  register: ignition_metadata_stat
+
+- name: Compute install-dir's age, in hours
+  ansible.builtin.set_fact:
+    ignition_age_hours: "{{ ((ansible_date_time.epoch | int) - (ignition_metadata_stat.stat.mtime | int)) / 3600 }}"
+  when: ignition_metadata_stat.stat.exists
+
+- name: Don't touch anything if install-dir is still valid
+  ansible.builtin.debug:
+    msg: >-
+      install-dir is {{ ignition_age_hours | round(1) }}h old (limit:
+      {{ ocplab_ignition_max_age_hours }}h) — not regenerating. Use
+      'ocplab ignition --force' to force it anyway.
+  when:
+    - ignition_metadata_stat.stat.exists
+    - ignition_age_hours | float < (ocplab_ignition_max_age_hours | float)
+    - not (ignition_force | bool)
+
+- name: Regenerate install-dir if missing, expired, or forced
+  when: >-
+    not ignition_metadata_stat.stat.exists
+    or ignition_age_hours | float >= (ocplab_ignition_max_age_hours | float)
+    or (ignition_force | bool)
+  block:
+    - ansible.builtin.import_tasks: generate.yml

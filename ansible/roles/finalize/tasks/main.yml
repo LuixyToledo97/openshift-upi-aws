@@ -1,0 +1,42 @@
+---
+# finalize: everything that doesn't approve/clean itself up in UPI
+# (README §5, steps 5, 5.5, and 6). Requires an API server that's already
+# responding — makes no sense before 'cluster_boot' finishes.
+
+- name: "Approve the workers' CSRs ({{ ocplab_csr_approval_rounds }} rounds)"
+  ansible.builtin.include_tasks: approve_csr_round.yml
+  loop: "{{ range(1, ocplab_csr_approval_rounds + 1) | list }}"
+  loop_control:
+    loop_var: finalize_csr_round
+
+# In UPI there are no Machine objects for the masters (Terraform created
+# them), so the CPMS can never satisfy its replicas and stays Degraded,
+# blocking the wait-for below. The operator recreates it as Inactive and
+# it turns True on its own, no need to wait for it here (the wait-for
+# install-complete below already covers it).
+- name: Disable the ControlPlaneMachineSet
+  kubernetes.core.k8s:
+    state: absent
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: machine.openshift.io/v1
+    kind: ControlPlaneMachineSet
+    name: cluster
+    namespace: openshift-machine-api
+
+- name: "Tip: how to watch live installer output while this waits"
+  ansible.builtin.debug:
+    msg: >-
+      To follow the installer's own log live, open another terminal and
+      run: less +F {{ ocplab_install_dir }}/.openshift_install.log
+
+- name: Wait for the installation to finish (openshift-install wait-for install-complete)
+  ansible.builtin.command:
+    cmd: "openshift-install wait-for install-complete --dir={{ ocplab_install_dir }} --log-level=info"
+  environment:
+    AWS_PROFILE: "{{ ocplab_aws_profile }}"
+  changed_when: false
+
+# Always a post-install step (see custom_certificates.yml) — deliberately
+# after wait-for above, not before.
+- name: Custom TLS certs for the API and *.apps, if configured
+  ansible.builtin.import_tasks: custom_certificates.yml

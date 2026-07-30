@@ -1,0 +1,7 @@
+---
+# Bounded on purpose — this only needs to catch a real TCP handshake
+# (normally sub-second) vs. genuinely nothing listening (powered off /
+# destroyed cluster). Long enough to not false-positive on a slow
+# network, short enough that a powered-off cluster fails in seconds
+# instead of hanging on the Kubernetes client's own much longer default.
+verify_api_reachability_timeout: 10

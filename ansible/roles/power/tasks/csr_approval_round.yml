@@ -1,0 +1,54 @@
+---
+# Self-contained rather than cross-imported from finalize/tasks/
+# approve_csr_round.yml — that file is tightly coupled to finalize_*
+# vars, and this project's convention for reusing another role's logic is
+# a full include_role (see verify's use at the end of on.yml), not a
+# cross-role task-file path import. ~20 lines duplicated is clearer than
+# a fragile relative path out of this role's own tasks/ directory.
+#
+# Two rounds because there are two kinds of CSR: first the client one
+# (registers the node), and only after that does the kubelet request the
+# server one — same reasoning as finalize's version. "== `null`", not the
+# tempting "[?!status.conditions]", to detect an unapproved CSR — the
+# negation form silently breaks when combined with a trailing projection,
+# found (and documented) elsewhere in this repo.
+- name: "CSR round {{ power_csr_round }}/{{ ocplab_csr_approval_rounds }} — list pending CSRs"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: certificates.k8s.io/v1
+    kind: CertificateSigningRequest
+  register: power_csr_list
+
+# retries/until: right after 'power on' brings the masters back, the API
+# server behind the NLB can refuse connections transiently for a few
+# seconds (target health still stabilizing) — found live, mid-loop, on a
+# real 'ocplab power on': the first CSR in the loop approved fine, the
+# very next one hit "connection to ... was refused", and without a retry
+# that aborted the whole play instead of just that one iteration. Same
+# class of transient-API-flakiness already documented elsewhere in this
+# repo (kube-apiserver rolling revisions after a servingCerts change).
+- name: "CSR round {{ power_csr_round }}/{{ ocplab_csr_approval_rounds }} — approve the pending ones"
+  ansible.builtin.command:
+    cmd: "oc adm certificate approve {{ item }}"
+  environment:
+    KUBECONFIG: "{{ ocplab_kubeconfig }}"
+  loop: "{{ power_csr_list.resources | json_query(power_pending_csr_query) }}"
+  vars:
+    power_pending_csr_query: "[?status.conditions == `null`].metadata.name"
+  register: power_csr_approve_result
+  until: power_csr_approve_result.rc == 0
+  retries: 5
+  delay: 5
+
+- name: "CSR round {{ power_csr_round }}/{{ ocplab_csr_approval_rounds }} — summary"
+  ansible.builtin.debug:
+    msg: >-
+      {{ (power_csr_list.resources | json_query(power_pending_csr_query)) | length }}
+      CSRs approved in this round.
+  vars:
+    power_pending_csr_query: "[?status.conditions == `null`].metadata.name"
+
+- name: "CSR round {{ power_csr_round }}/{{ ocplab_csr_approval_rounds }} — wait before the next round"
+  ansible.builtin.pause:
+    seconds: "{{ ocplab_csr_round_wait_seconds }}"
+  when: power_csr_round < ocplab_csr_approval_rounds

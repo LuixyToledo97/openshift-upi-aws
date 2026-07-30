@@ -1,0 +1,160 @@
+---
+# Manages the PUBLIC hosted zone for the baseDomain. Without vpc_id/vpcs,
+# route53_zone looks up/creates/deletes a public zone, so it never touches
+# the cluster's private zone (that's managed by Terraform, not this role).
+#
+# NS delegation at the registrar (Cloudflare) stays manual on purpose —
+# 'ocplab preflight' already verifies it's set up correctly.
+#
+# Shared by apply/status/destroy: finding the zone is a read (unaffected
+# by check_mode) regardless of action — only 'apply' is allowed to
+# actually create it if missing (check_mode omitted); status/destroy force
+# check_mode so a missing zone is reported as "would create"/"nothing to
+# destroy" without ever creating one.
+- name: Find (or, for apply, create) the public hosted zone "{{ ocplab_base_domain }}"
+  amazon.aws.route53_zone:
+    zone: "{{ ocplab_base_domain }}"
+    comment: "ocplab bootstrap — {{ ocplab_cluster_name }} lab"
+    profile: "{{ ocplab_aws_profile }}"
+  register: bootstrap_zone
+  ignore_errors: true
+  check_mode: "{{ omit if ocplab_bootstrap_action == 'apply' else true }}"
+
+- name: Record a problem if the hosted zone couldn't be created/read
+  ansible.builtin.set_fact:
+    bootstrap_problems: "{{ bootstrap_problems + ['DNS: could not create/read the public hosted zone for ' + ocplab_base_domain + ' (' + (bootstrap_zone.msg | default('unknown error')) + ')'] }}"
+  when:
+    - ocplab_bootstrap_action in ['apply', 'status']
+    - bootstrap_zone.failed | default(true)
+
+- name: Set the real zone ID (empty if it doesn't exist — e.g. status/destroy against a missing zone)
+  ansible.builtin.set_fact:
+    # default('', true) — NOT just default('') — because when check_mode
+    # (status/destroy) reports "would create" against a missing zone,
+    # zone_id comes back as an explicit None, not undefined. default()
+    # only substitutes on undefined unless told to treat None as such
+    # too; without the second arg this silently became the STRING "None"
+    # (length 4, not 0) and broke the "does it exist" checks below.
+    bootstrap_real_zone_id: "{{ (bootstrap_zone.zone_id | default('', true)) | regex_replace('^/hostedzone/', '') }}"
+
+- name: "apply/status: show the zone and its nameservers"
+  when:
+    - ocplab_bootstrap_action in ['apply', 'status']
+    - not (bootstrap_zone.failed | default(true))
+  block:
+    - name: "status only: nothing to show yet if the zone doesn't exist"
+      ansible.builtin.debug:
+        msg: "Public hosted zone for {{ ocplab_base_domain }}: does not exist yet (would be created by 'ocplab bootstrap apply')."
+      when: bootstrap_real_zone_id | length == 0
+
+    # route53_zone (above) never returns the delegation set / nameservers,
+    # whether it just created the zone or found an existing one — found
+    # while testing this role for real. Fetch them separately so the user
+    # has everything needed to update their registrar in one place,
+    # instead of a second manual 'aws route53 get-hosted-zone' call.
+    - name: Fetch the zone's record sets (to read its NS record)
+      amazon.aws.route53_info:
+        query: record_sets
+        hosted_zone_id: "{{ bootstrap_real_zone_id }}"
+        profile: "{{ ocplab_aws_profile }}"
+      register: bootstrap_zone_records
+      when: bootstrap_real_zone_id | length > 0
+
+    - name: Extract the 4 delegation nameservers
+      vars:
+        bootstrap_ns_record: >-
+          {{ bootstrap_zone_records.resource_record_sets
+             | selectattr('type', 'equalto', 'NS')
+             | selectattr('name', 'equalto', ocplab_base_domain + '.')
+             | first }}
+      ansible.builtin.set_fact:
+        bootstrap_nameservers: "{{ bootstrap_ns_record.resource_records | map(attribute='value') | list }}"
+      when: bootstrap_real_zone_id | length > 0
+
+    # Not printed here on purpose — shown once, prominently, at the very
+    # end of the whole 'bootstrap apply' run (main.yml) instead of getting
+    # buried mid-output between the IAM and SSH-key tasks. Stashed as a
+    # fact so it survives to the end of the play.
+    - name: Stash the zone/nameserver info for the end-of-run summary
+      ansible.builtin.set_fact:
+        bootstrap_zone_summary:
+          zone_id: "{{ bootstrap_real_zone_id }}"
+          matches_cluster_yaml: "{{ bootstrap_real_zone_id == ocplab_route53_public_zone_id }}"
+          nameservers: "{{ bootstrap_nameservers }}"
+      when: bootstrap_real_zone_id | length > 0
+
+- name: "destroy: tear down the hosted zone"
+  when: ocplab_bootstrap_action == 'destroy'
+  block:
+    - name: Show if there's nothing to destroy
+      ansible.builtin.debug:
+        msg: "Public hosted zone for {{ ocplab_base_domain }}: does not exist, nothing to destroy."
+      when: (bootstrap_zone.failed | default(true)) or (bootstrap_real_zone_id | length == 0)
+
+    - name: "destroy: clean up stray records and delete the zone"
+      when:
+        - not (bootstrap_zone.failed | default(true))
+        - bootstrap_real_zone_id | length > 0
+      block:
+        - name: List all record sets in the zone
+          amazon.aws.route53_info:
+            query: record_sets
+            hosted_zone_id: "{{ bootstrap_real_zone_id }}"
+            profile: "{{ ocplab_aws_profile }}"
+          register: bootstrap_destroy_records
+
+        # The zone apex always has exactly one NS + one SOA record,
+        # auto-managed by Route53 — they get deleted for free along with
+        # the zone itself and can't be deleted independently anyway.
+        # Anything else is a stray leftover: found for real this session
+        # — the ingress-operator creates a '*.apps.<cluster>.<domain>'
+        # alias directly in this PUBLIC zone (not through Terraform), and
+        # 'ocplab destroy' never cleans it up, so it survives every
+        # cluster teardown. delete_hosted_zone fails outright if anything
+        # but NS/SOA remains, so these have to go first.
+        - name: Work out which records are stray (not the apex NS/SOA pair)
+          ansible.builtin.set_fact:
+            bootstrap_stray_records: "{{ bootstrap_destroy_records.resource_record_sets | rejectattr('type', 'in', ['NS', 'SOA']) | list }}"
+
+        - name: Render the delete change-batch for the stray records
+          ansible.builtin.template:
+            src: delete_stray_records.json.j2
+            dest: "{{ bootstrap_tmp_dir.path }}/delete_stray_records.json"
+            mode: "0600"
+          when: bootstrap_stray_records | length > 0
+
+        - name: Delete the stray records
+          ansible.builtin.command:
+            # NOT --cli-input-json (that expects the whole request shape,
+            # {HostedZoneId, ChangeBatch} — confirmed the hard way: AWS
+            # rejected "Changes" as an unknown top-level parameter).
+            # change-resource-record-sets specifically takes the batch via
+            # --change-batch instead, which matches the template as-is.
+            cmd: >-
+              aws route53 change-resource-record-sets --profile {{ ocplab_aws_profile }}
+              --hosted-zone-id {{ bootstrap_real_zone_id }}
+              --change-batch file://{{ bootstrap_tmp_dir.path }}/delete_stray_records.json
+          register: bootstrap_delete_stray
+          when: bootstrap_stray_records | length > 0
+
+        - name: Show which stray records were cleaned up
+          ansible.builtin.debug:
+            msg: "Deleted {{ bootstrap_stray_records | length }} stray record(s): {{ bootstrap_stray_records | map(attribute='name') | list }}"
+          when: bootstrap_stray_records | length > 0
+
+        - name: Delete the now-empty hosted zone
+          amazon.aws.route53_zone:
+            zone: "{{ ocplab_base_domain }}"
+            state: absent
+            profile: "{{ ocplab_aws_profile }}"
+          register: bootstrap_zone_delete
+
+        - name: Record a problem if the zone couldn't be deleted
+          ansible.builtin.set_fact:
+            bootstrap_problems: "{{ bootstrap_problems + ['DNS: could not delete the public hosted zone for ' + ocplab_base_domain + ' (' + (bootstrap_zone_delete.msg | default('unknown error')) + ')'] }}"
+          when: bootstrap_zone_delete.failed | default(false)
+
+        - name: Show the result
+          ansible.builtin.debug:
+            msg: "Public hosted zone for {{ ocplab_base_domain }} ({{ bootstrap_real_zone_id }}): deleted."
+          when: not (bootstrap_zone_delete.failed | default(false))

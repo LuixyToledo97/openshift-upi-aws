@@ -1,0 +1,27 @@
+---
+# cluster_boot: waits for the temporary control plane (bootstrap) to
+# finish its job and tears down that instance — it's no longer needed and
+# keeps billing while it exists. openshift-install wait-for is just a
+# monitor (not an action): if it times out, nothing bad happens, it can
+# be re-run and it reattaches to the current state (README §5, step 3).
+
+- name: "Tip: how to watch live installer output while this waits"
+  ansible.builtin.debug:
+    msg: >-
+      This can take 13-20 minutes. To follow the installer's own log live,
+      open another terminal and run: less +F {{ ocplab_install_dir }}/.openshift_install.log
+
+- name: Wait for the bootstrap to complete (openshift-install wait-for bootstrap-complete)
+  ansible.builtin.command:
+    cmd: "openshift-install wait-for bootstrap-complete --dir={{ ocplab_install_dir }} --log-level=info"
+  environment:
+    AWS_PROFILE: "{{ ocplab_aws_profile }}"
+  changed_when: false
+
+- name: Destroy the bootstrap instance (no longer needed)
+  ansible.builtin.include_role:
+    name: infra
+  vars:
+    infra_state: absent
+    infra_targets:
+      - aws_instance.bootstrap

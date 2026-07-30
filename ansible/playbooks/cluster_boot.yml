@@ -1,0 +1,7 @@
+---
+# Standalone for now — composed into playbooks/deploy.yml.
+- name: ocplab cluster_boot — waits for the bootstrap and destroys it
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - cluster_boot

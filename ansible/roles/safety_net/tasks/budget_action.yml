@@ -1,0 +1,125 @@
+---
+- name: "{{ ocplab_safety_net_action }}: IAM role {{ safety_net_budget_action_role_name }}"
+  amazon.aws.iam_role:
+    profile: "{{ ocplab_aws_profile }}"
+    name: "{{ safety_net_budget_action_role_name }}"
+    state: "{{ 'absent' if ocplab_safety_net_action == 'destroy' else 'present' }}"
+    assume_role_policy_document:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Principal: {Service: budgets.amazonaws.com}
+          Action: sts:AssumeRole
+    create_instance_profile: false
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  register: sn_budget_action_role
+
+# Only managed in apply/status: when the role gets deleted above
+# (state=absent), amazon.aws.iam_role already cleans up its inline
+# policies on its own — the IAM API requires that before a role can be
+# deleted, so handling it separately in destroy would be redundant (and
+# would fail if the role no longer exists).
+#
+# In 'status', only run this if the role above was found to already exist
+# (sn_budget_action_role.changed == false under forced check_mode, this
+# project's established "would create" == "doesn't exist" signal — see
+# main.yml). Skipping otherwise isn't just tidiness: amazon.aws.iam_policy
+# calls iam:ListRolePolicies to decide what it WOULD change, and that call
+# raises a hard NoSuchEntity (not a graceful "would create") when the role
+# doesn't exist — found for real running 'ocplab safety-net status' right
+# after 'destroy', which aborted the whole play instead of reporting "not
+# deployed".
+#
+# Minimum scope: it can only touch the lab user's policy attachments,
+# nothing else — with the account ID resolved dynamically instead of
+# hardcoded (unlike the original
+# safety-net/iam/budgets-role-permissions.json).
+- name: "{{ ocplab_safety_net_action }}: permissions for role {{ safety_net_budget_action_role_name }}"
+  amazon.aws.iam_policy:
+    profile: "{{ ocplab_aws_profile }}"
+    iam_type: role
+    iam_name: "{{ safety_net_budget_action_role_name }}"
+    policy_name: budgets-attach-policy
+    state: present
+    policy_json:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Action:
+            - iam:AttachUserPolicy
+            - iam:DetachUserPolicy
+            - iam:ListAttachedUserPolicies
+          Resource: "arn:aws:iam::{{ sn_caller.account }}:user/{{ ocplab_iam_user_name }}"
+  check_mode: "{{ true if ocplab_safety_net_action == 'status' else omit }}"
+  when: >-
+    ocplab_safety_net_action == 'apply'
+    or (ocplab_safety_net_action == 'status' and not sn_budget_action_role.changed)
+
+- name: Check whether the budget already has a Budget Action
+  ansible.builtin.command:
+    cmd: >-
+      aws budgets describe-budget-actions-for-budget --profile {{ ocplab_aws_profile }}
+      --account-id {{ sn_caller.account }} --budget-name {{ safety_net_budget_name }}
+      --query "Actions[0].ActionId" --output text
+  register: sn_budget_action_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# rc must be checked too, not just stdout: if the BUDGET itself doesn't
+# exist (e.g. status after a full 'destroy'), the command above fails
+# outright with NotFoundException — rc != 0 and empty stdout, not the
+# literal text 'None' — so checking stdout alone misread "budget action
+# doesn't exist" as "exists ()". Found for real testing 'ocplab
+# safety-net status' right after destroying everything.
+- name: Determine whether the Budget Action actually exists
+  ansible.builtin.set_fact:
+    sn_budget_action_exists: "{{ sn_budget_action_check.rc == 0 and (sn_budget_action_check.stdout | default('None')) != 'None' }}"
+
+- name: Render the Budget Action creation payload
+  ansible.builtin.template:
+    src: create_budget_action.json.j2
+    dest: "{{ sn_tmp_dir.path }}/create_budget_action.json"
+    mode: "0600"
+  when: ocplab_safety_net_action == 'apply' and not sn_budget_action_exists
+
+# IAM is eventually consistent: right after creating
+# budget_action_role above, the Budgets service can still fail to assume
+# it for a few seconds ("AccessDeniedException ... Budgets permission
+# required to assume [ExecutionRole: ...]"). Found by running this for
+# real for the first time — retry instead of a fixed sleep, since
+# propagation time varies.
+- name: "Create the Budget Action (automatic AUTOMATIC lockdown at 80%)"
+  ansible.builtin.command:
+    cmd: >-
+      aws budgets create-budget-action --profile {{ ocplab_aws_profile }}
+      --cli-input-json file://{{ sn_tmp_dir.path }}/create_budget_action.json
+  register: sn_budget_action_create
+  until: sn_budget_action_create.rc == 0
+  retries: 6
+  delay: 10
+  failed_when: false
+  when: ocplab_safety_net_action == 'apply' and not sn_budget_action_exists
+
+- name: Fail with a clear message if the Budget Action still couldn't be created
+  ansible.builtin.fail:
+    msg: "{{ sn_budget_action_create.stderr | default('unknown error') }}"
+  when: >-
+    ocplab_safety_net_action == 'apply'
+    and not sn_budget_action_exists
+    and sn_budget_action_create.rc | default(1) != 0
+
+- name: Delete the Budget Action
+  ansible.builtin.command:
+    cmd: >-
+      aws budgets delete-budget-action --profile {{ ocplab_aws_profile }}
+      --account-id {{ sn_caller.account }} --budget-name {{ safety_net_budget_name }}
+      --action-id {{ sn_budget_action_check.stdout }}
+  when: ocplab_safety_net_action == 'destroy' and sn_budget_action_exists
+
+- name: "Status: Budget Action"
+  ansible.builtin.debug:
+    msg: >-
+      Budget Action:
+      {{ ('exists (' + sn_budget_action_check.stdout + ')') if sn_budget_action_exists else 'does not exist' }}
+  when: ocplab_safety_net_action == 'status'

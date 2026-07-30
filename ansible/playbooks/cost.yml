@@ -1,0 +1,6 @@
+---
+- name: ocplab cost — approximate hourly cost of currently deployed resources
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - cost

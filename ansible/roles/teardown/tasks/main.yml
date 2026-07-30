@@ -1,0 +1,59 @@
+---
+# teardown: ports scripts/teardown.sh. The cluster creates AWS resources
+# that Terraform doesn't know about (the router ELB, its ENIs, its
+# security group, and the *.apps records) — if terraform destroy runs
+# without cleaning those up first, it fails with DependencyViolation when
+# deleting the IGW and the public subnet.
+#
+# Unlike the original script, the wait here is real polling (until/
+# retries/delay), not a blind sleep.
+
+- name: Find the lab's VPC by its Project tag
+  amazon.aws.ec2_vpc_net_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Project": "{{ ocplab_project_tag }}"
+  register: teardown_vpc_info
+
+- name: "Short path: no VPC found — run terraform destroy just in case"
+  when: teardown_vpc_info.vpcs | length == 0
+  block:
+    - name: Warn that no VPC was found
+      ansible.builtin.debug:
+        msg: >-
+          No VPC found with Project={{ ocplab_project_tag }} — it may
+          already be destroyed. Running terraform destroy just in case.
+
+    - name: Terraform destroy
+      ansible.builtin.include_role:
+        name: infra
+      vars:
+        infra_state: absent
+
+- name: "Full path: clean up orphaned resources, terraform destroy, and verify"
+  when: teardown_vpc_info.vpcs | length > 0
+  block:
+    - name: Set the found VPC's ID
+      ansible.builtin.set_fact:
+        teardown_vpc_id: "{{ teardown_vpc_info.vpcs[0].vpc_id }}"
+
+    - name: "Step 1/5 — ask the ingress-operator to delete its ELB"
+      ansible.builtin.import_tasks: delete_ingresscontroller.yml
+
+    - name: "Step 2/5 — wait (real poll) for the router ELB to disappear"
+      ansible.builtin.import_tasks: wait_for_elb.yml
+
+    - name: "Step 3/5 — wait (real poll) for the ENIs to free up"
+      ansible.builtin.import_tasks: wait_for_enis.yml
+
+    - name: "Step 4/5 — clean up orphaned k8s-elb-* security groups"
+      ansible.builtin.import_tasks: cleanup_orphan_sgs.yml
+
+    - name: "Step 5/5 — terraform destroy"
+      ansible.builtin.include_role:
+        name: infra
+      vars:
+        infra_state: absent
+
+    - name: Final verification (informational)
+      ansible.builtin.import_tasks: verify.yml

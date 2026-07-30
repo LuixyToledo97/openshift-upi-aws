@@ -1,0 +1,34 @@
+---
+- name: Check that the required binaries are on the PATH
+  ansible.builtin.command: "which {{ item }}"
+  loop: "{{ preflight_required_binaries }}"
+  register: preflight_which
+  changed_when: false
+  failed_when: false
+
+- name: Record the missing binaries
+  ansible.builtin.set_fact:
+    preflight_problems: "{{ preflight_problems + [\"binaries: missing '\" + bin_check.item + \"' on the PATH (see README, section 2.1)\"] }}"
+  loop: "{{ preflight_which.results }}"
+  loop_control:
+    loop_var: bin_check
+    label: "{{ bin_check.item }}"
+  when: bin_check.rc != 0
+
+- name: Get the installed terraform version
+  ansible.builtin.command: terraform version -json
+  changed_when: false
+  failed_when: false
+  register: preflight_tf_version_raw
+  when: "'terraform' not in (preflight_which.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list)"
+
+- name: Check the minimum terraform version
+  vars:
+    tf_version: "{{ (preflight_tf_version_raw.stdout | from_json).terraform_version }}"
+  ansible.builtin.set_fact:
+    preflight_problems: "{{ preflight_problems + ['binaries: terraform ' + tf_version + ' is older than the required minimum ' + preflight_min_terraform_version + ' (terraform/versions.tf)'] }}"
+  when:
+    - preflight_tf_version_raw is defined
+    - preflight_tf_version_raw.rc is defined
+    - preflight_tf_version_raw.rc == 0
+    - (preflight_tf_version_raw.stdout | from_json).terraform_version is version(preflight_min_terraform_version, '<')

@@ -1,0 +1,17 @@
+---
+# Fixed names — same as ocplab_iam_user_name, they don't come from
+# cluster.yaml because they're a single set of resources per AWS account,
+# not per cluster.
+safety_net_budget_name: openshift-lab-budget
+safety_net_deny_policy_name: openshift-lab-budget-lockdown
+safety_net_budget_action_role_name: openshift-lab-budget-action-role
+safety_net_killswitch_role_name: openshift-lab-killswitch-role
+safety_net_killswitch_function_name: openshift-lab-killswitch
+safety_net_scheduler_role_name: openshift-lab-scheduler-role
+safety_net_schedule_name: openshift-lab-killswitch-schedule
+
+# apply = create/ensure · destroy = tear down (reverse order) · status =
+# only report, without touching anything. Sent by the CLI:
+# 'ocplab safety-net <action>' -> extra-var "ocplab_safety_net_action"
+# (see cmd_safety_net in ocplab).
+ocplab_safety_net_action: status

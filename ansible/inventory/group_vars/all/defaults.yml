@@ -1,0 +1,48 @@
+---
+# Project default values — hand-maintained, NOT touched by `ocplab render`.
+# Whatever varies per cluster (name, network, sizes...) lives in
+# generated.yml, which `ocplab render` does generate from cluster.yaml.
+
+# playbook_dir is the directory of the currently-running .yml file itself
+# (ansible/playbooks/), not 'ansible/' — it takes TWO levels up to reach
+# the repo root. With just one, everything derived from this (install_dir,
+# archive_dir, terraform_dir) points inside ansible/ without raising any
+# error — this was discovered by running the ignition role for real and
+# seeing it write to ansible/install-dir instead of install-dir/.
+ocplab_repo_root: "{{ playbook_dir }}/../.."
+ocplab_install_dir: "{{ ocplab_repo_root }}/install-dir"
+ocplab_archive_dir: "{{ ocplab_repo_root }}/archive"
+ocplab_terraform_dir: "{{ ocplab_repo_root }}/terraform"
+# Used by both finalize and teardown — a single place to derive it.
+ocplab_kubeconfig: "{{ ocplab_install_dir }}/auth/kubeconfig"
+
+# Tag that locates all of the lab's resources in AWS (VPC, instances, NAT,
+# ELBs...). Used by both teardown and the killswitch.
+ocplab_project_tag: openshift-lab
+
+# The lab's "working" IAM user. Created by the bootstrap role and locked
+# down (temporarily, via an IAM policy) by the safety_net role once the
+# budget goes over 80% — both need the same name.
+ocplab_iam_user_name: openshift-lab-terraform
+
+# Ignition certificates expire after 24h — past that, install-dir has to
+# be archived and regenerated clean.
+ocplab_ignition_max_age_hours: 24
+
+# Wait times (seconds), aligned with scripts/teardown.sh and with the
+# default timeout of "openshift-install wait-for bootstrap-complete".
+ocplab_bootstrap_wait_timeout: 2700
+ocplab_elb_teardown_timeout: 300
+ocplab_elb_teardown_poll_interval: 10
+# The Classic router ELB disappears from the AWS API almost immediately
+# (see ocplab_elb_teardown_timeout above), but AWS releases its
+# amazon-elb-owned ENIs and their public IPs in the background on a much
+# longer, looser timeline — found running this for real, where it took
+# over 35 minutes. 1200s (20min) is a generous bound for that; if it's
+# still not enough, 'ocplab destroy' is idempotent and safe to re-run.
+ocplab_eni_teardown_timeout: 1200
+
+# Worker CSR approval: two rounds (client, then server), with a wait
+# between them so the kubelet has time to request the second CSR.
+ocplab_csr_approval_rounds: 2
+ocplab_csr_round_wait_seconds: 180

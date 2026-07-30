@@ -1,0 +1,11 @@
+---
+# cost: approximate USD/hour for whatever's currently deployed, read-only
+# throughout (no mutation, matching 'verify'/'power status'). Three steps:
+# discover what's actually deployed and its power state, make sure this
+# region's on-demand prices are cached and fresh, then compute and print
+# the breakdown. See each task file's own header for why it's built the
+# way it is.
+
+- ansible.builtin.import_tasks: discover_resources.yml
+- ansible.builtin.import_tasks: refresh_pricing.yml
+- ansible.builtin.import_tasks: compute_report.yml

@@ -1,0 +1,31 @@
+---
+# The router ELB is NOT named k8s-elb-* (that's the name of its security
+# group): it has a hash-based name, so it has to be filtered by VPCId,
+# never by name — filtering the wrong way gives false negatives and the
+# destroy hangs on the IGW.
+- name: Real poll until no Classic Load Balancers are left in the VPC
+  amazon.aws.elb_classic_lb_info:
+    profile: "{{ ocplab_aws_profile }}"
+  register: teardown_elb_poll
+  until: (teardown_elb_poll.elbs | selectattr('vpc_id', 'equalto', teardown_vpc_id) | list) | length == 0
+  retries: "{{ (ocplab_elb_teardown_timeout / ocplab_elb_teardown_poll_interval) | int }}"
+  delay: "{{ ocplab_elb_teardown_poll_interval }}"
+  ignore_errors: true
+
+- name: Compute the VPC's remaining ELBs after the poll
+  ansible.builtin.set_fact:
+    teardown_remaining_elbs: >-
+      {{ teardown_elb_poll.elbs | default([]) | selectattr('vpc_id', 'equalto', teardown_vpc_id)
+         | map(attribute='load_balancer_name') | list }}
+
+- name: Manually delete the ELBs that didn't disappear on their own (timeout reached)
+  amazon.aws.elb_classic_lb:
+    profile: "{{ ocplab_aws_profile }}"
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ teardown_remaining_elbs }}"
+
+- name: Wait for AWS to finish releasing what was tied to the manually deleted ELB
+  ansible.builtin.pause:
+    seconds: 20
+  when: teardown_remaining_elbs | length > 0

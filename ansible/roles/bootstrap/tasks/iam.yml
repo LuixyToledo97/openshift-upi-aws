@@ -1,0 +1,172 @@
+---
+- name: Check whether the target profile "{{ ocplab_aws_profile }}" already works
+  amazon.aws.aws_caller_info:
+    profile: "{{ ocplab_aws_profile }}"
+  register: bootstrap_existing_caller
+  ignore_errors: true
+
+- name: "apply/status: ensure the IAM user and its credentials"
+  when: ocplab_bootstrap_action in ['apply', 'status']
+  block:
+    - name: Don't touch anything if the target profile is already the expected user
+      ansible.builtin.debug:
+        msg: >-
+          Profile '{{ ocplab_aws_profile }}' already works
+          ({{ bootstrap_existing_caller.arn }}) — not touching the IAM user.
+      when: >-
+        not (bootstrap_existing_caller.failed | default(true))
+        and (bootstrap_existing_caller.arn | default('')) is search('/' + ocplab_iam_user_name + '$')
+
+    - name: Create the IAM user and its credentials if needed
+      when: >-
+        (bootstrap_existing_caller.failed | default(true))
+        or not ((bootstrap_existing_caller.arn | default('')) is search('/' + ocplab_iam_user_name + '$'))
+      block:
+        - name: Check that the admin profile "{{ bootstrap_admin_profile }}" works
+          amazon.aws.aws_caller_info:
+            profile: "{{ bootstrap_admin_profile }}"
+          register: bootstrap_admin_caller
+          ignore_errors: true
+
+        - name: Record a problem if the admin profile doesn't work
+          ansible.builtin.set_fact:
+            bootstrap_problems: "{{ bootstrap_problems + [\"IAM: admin profile '\" + bootstrap_admin_profile + \"' doesn't work (\" + (bootstrap_admin_caller.msg | default('unknown error')) + \"). Pass it with 'ocplab bootstrap --admin-profile <profile>' or configure it with 'aws configure --profile \" + bootstrap_admin_profile + \"'.\"] }}"
+          when: bootstrap_admin_caller.failed | default(true)
+
+        - name: Create the IAM user "{{ ocplab_iam_user_name }}" with AdministratorAccess
+          amazon.aws.iam_user:
+            name: "{{ ocplab_iam_user_name }}"
+            managed_policies: "{{ bootstrap_iam_managed_policies }}"
+            state: present
+            profile: "{{ bootstrap_admin_profile }}"
+          register: bootstrap_iam_user
+          check_mode: "{{ true if ocplab_bootstrap_action == 'status' else omit }}"
+          when: not (bootstrap_admin_caller.failed | default(true))
+
+        - name: Query the user's existing access keys
+          amazon.aws.iam_access_key_info:
+            user_name: "{{ ocplab_iam_user_name }}"
+            profile: "{{ bootstrap_admin_profile }}"
+          register: bootstrap_existing_keys
+          when: not (bootstrap_admin_caller.failed | default(true))
+
+        - name: Record a problem if there are already 2 access keys (AWS limit) and the local profile doesn't work
+          ansible.builtin.set_fact:
+            bootstrap_problems: "{{ bootstrap_problems + [\"IAM: user '\" + ocplab_iam_user_name + \"' already has \" + (bootstrap_existing_keys.access_keys | length | string) + \" access keys (AWS's limit is 2) and the local profile '\" + ocplab_aws_profile + \"' doesn't work. Delete an old key in the IAM console or copy valid credentials into ~/.aws/credentials by hand.\"] }}"
+          when:
+            - not (bootstrap_admin_caller.failed | default(true))
+            - bootstrap_existing_keys.access_keys | default([]) | length >= 2
+
+        - name: Create a new access key
+          amazon.aws.iam_access_key:
+            user_name: "{{ ocplab_iam_user_name }}"
+            state: present
+            profile: "{{ bootstrap_admin_profile }}"
+          register: bootstrap_new_key
+          no_log: true
+          check_mode: "{{ true if ocplab_bootstrap_action == 'status' else omit }}"
+          when:
+            - not (bootstrap_admin_caller.failed | default(true))
+            - bootstrap_existing_keys.access_keys | default([]) | length < 2
+
+        - name: Make sure ~/.aws exists
+          ansible.builtin.file:
+            path: "{{ '~/.aws' | expanduser }}"
+            state: directory
+            mode: "0700"
+          when: bootstrap_new_key is defined and bootstrap_new_key.access_key is defined
+
+        - name: Write the profile "{{ ocplab_aws_profile }}" into ~/.aws/credentials
+          community.general.ini_file:
+            path: "{{ '~/.aws/credentials' | expanduser }}"
+            section: "{{ ocplab_aws_profile }}"
+            option: "{{ item.option }}"
+            value: "{{ item.value }}"
+            mode: "0600"
+          loop:
+            - { option: aws_access_key_id, value: "{{ bootstrap_new_key.access_key.access_key_id }}" }
+            - { option: aws_secret_access_key, value: "{{ bootstrap_new_key.access_key.secret_access_key }}" }
+          no_log: true
+          when:
+            - bootstrap_new_key is defined and bootstrap_new_key.access_key is defined
+            - ocplab_bootstrap_action == 'apply'
+
+        - name: Confirm that the new profile now works
+          amazon.aws.aws_caller_info:
+            profile: "{{ ocplab_aws_profile }}"
+          register: bootstrap_confirm_caller
+          when:
+            - bootstrap_new_key is defined and bootstrap_new_key.access_key is defined
+            - ocplab_bootstrap_action == 'apply'
+
+        - name: Show confirmation
+          ansible.builtin.debug:
+            msg: >-
+              Profile '{{ ocplab_aws_profile }}' created and working:
+              {{ bootstrap_confirm_caller.arn }}
+              (access key {{ bootstrap_new_key.access_key.access_key_id }} — the secret
+              is already in ~/.aws/credentials, not shown here).
+          when: bootstrap_confirm_caller is defined and not (bootstrap_confirm_caller.failed | default(true))
+
+        - name: "status only: report what would be created"
+          ansible.builtin.debug:
+            msg: >-
+              IAM user '{{ ocplab_iam_user_name }}':
+              {{ 'would be created' if bootstrap_iam_user.changed | default(false) else 'exists' }}
+              — profile '{{ ocplab_aws_profile }}' would get a new access key
+              {{ 'if it was missing' if bootstrap_existing_keys.access_keys | default([]) | length > 0 else '' }}.
+          when: ocplab_bootstrap_action == 'status'
+
+# Deliberately gated behind BOTH ocplab_bootstrap_action == 'destroy' AND
+# bootstrap_delete_iam_user (a separate, explicit CLI flag) — this is the
+# single most protected resource in the whole project: it's the only
+# configured AWS profile on this machine, so deleting it is a real
+# self-lockout risk if there's no other working admin credential around.
+# Uses --admin-profile throughout, never the target profile deleting
+# itself.
+- name: "destroy --delete-iam-user: delete the IAM user"
+  when:
+    - ocplab_bootstrap_action == 'destroy'
+    - bootstrap_delete_iam_user | default(false)
+  block:
+    - name: Refuse if the admin profile is the same as the profile being deleted
+      ansible.builtin.assert:
+        that: bootstrap_admin_profile != ocplab_aws_profile
+        fail_msg: >-
+          --admin-profile ('{{ bootstrap_admin_profile }}') can't be the same as
+          platform.aws.profile ('{{ ocplab_aws_profile }}') — that would be the
+          profile deleting itself. Pass a different, already-working admin
+          profile with 'ocplab bootstrap destroy --delete-iam-user --admin-profile <profile>'.
+
+    - name: Check that the admin profile "{{ bootstrap_admin_profile }}" works
+      amazon.aws.aws_caller_info:
+        profile: "{{ bootstrap_admin_profile }}"
+      register: bootstrap_delete_admin_caller
+      ignore_errors: true
+
+    - name: Record a problem if the admin profile doesn't work
+      ansible.builtin.set_fact:
+        bootstrap_problems: "{{ bootstrap_problems + [\"IAM: admin profile '\" + bootstrap_admin_profile + \"' doesn't work (\" + (bootstrap_delete_admin_caller.msg | default('unknown error')) + \"). Can't delete the IAM user without a working admin profile.\"] }}"
+      when: bootstrap_delete_admin_caller.failed | default(true)
+
+    - name: Delete the IAM user "{{ ocplab_iam_user_name }}" (and its access keys/policy attachments)
+      amazon.aws.iam_user:
+        name: "{{ ocplab_iam_user_name }}"
+        state: absent
+        profile: "{{ bootstrap_admin_profile }}"
+      register: bootstrap_iam_user_delete
+      when: not (bootstrap_delete_admin_caller.failed | default(true))
+
+    - name: Record a problem if the IAM user couldn't be deleted
+      ansible.builtin.set_fact:
+        bootstrap_problems: "{{ bootstrap_problems + ['IAM: could not delete user ' + ocplab_iam_user_name + ' (' + (bootstrap_iam_user_delete.msg | default('unknown error')) + ')'] }}"
+      when:
+        - not (bootstrap_delete_admin_caller.failed | default(true))
+        - bootstrap_iam_user_delete.failed | default(false)
+
+    - name: Show the result
+      ansible.builtin.debug:
+        msg: "IAM user '{{ ocplab_iam_user_name }}': deleted. Your local profile '{{ ocplab_aws_profile }}' credentials no longer work."
+      when:
+        - not (bootstrap_delete_admin_caller.failed | default(true))
+        - not (bootstrap_iam_user_delete.failed | default(false))

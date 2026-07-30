@@ -1,0 +1,24 @@
+{
+  "Changes": [
+{% for record in bootstrap_stray_records %}
+    {
+      "Action": "DELETE",
+      "ResourceRecordSet": {
+        "Name": {{ record.name | to_json }},
+        "Type": {{ record.type | to_json }}{% if record.alias_target is defined %},
+        "AliasTarget": {
+          "HostedZoneId": {{ record.alias_target.hosted_zone_id | to_json }},
+          "DNSName": {{ record.alias_target.dns_name | to_json }},
+          "EvaluateTargetHealth": {{ record.alias_target.evaluate_target_health | to_json }}
+        }{% else %},
+        "TTL": {{ record.ttl }},
+        "ResourceRecords": [
+{% for rr in record.resource_records %}
+          {"Value": {{ rr.value | to_json }}}{% if not loop.last %},{% endif %}
+{% endfor %}
+        ]{% endif %}
+      }
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+  ]
+}

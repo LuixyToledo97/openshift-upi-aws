@@ -1,0 +1,13 @@
+---
+# Collections needed by the ocplab roles.
+# Install with: ansible-galaxy collection install -r ansible/requirements.yml
+collections:
+  - name: community.general   # terraform module (infra role)
+    version: ">=8.0.0"
+  - name: amazon.aws          # preflight, safety_net (budgets, lambda, scheduler)
+    version: ">=7.0.0"
+  - name: kubernetes.core     # CSR approval, ingresscontroller, CPMS, custom certs
+    version: ">=3.0.0"
+
+# The community.general.dig lookup (preflight role, DNS delegation check)
+# also needs the "dnspython" Python package — see requirements.txt.
