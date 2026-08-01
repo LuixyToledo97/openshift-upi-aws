@@ -1444,7 +1444,8 @@ free to:
 - 📬 Submit a pull request with a fix, a new feature, or a better approach
 
 Whether it's a small typo fix or a bigger idea, all contributions are
-genuinely appreciated.
+genuinely appreciated. Check [BACKLOG.md](BACKLOG.md) for what's already
+planned — a good starting point if you're looking for something to pick up.
 
 ---
 

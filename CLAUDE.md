@@ -247,3 +247,8 @@ Extra: the `ControlPlaneMachineSet` always stays `Degraded` in UPI (no
   no behavior change; minor = new features/commands, backward compatible;
   major = breaking changes (e.g. a `cluster.yaml` schema change requiring
   manual migration, or removing/renaming a CLI command).
+- **Planned work lives in `BACKLOG.md`**, not in this file — ideas,
+  features, and fixes not yet built, each with the why and open questions
+  captured so context isn't lost before someone picks it up. When
+  something from it actually gets implemented, it moves into
+  `CHANGELOG.md` under `[Unreleased]` and gets removed from the backlog.
