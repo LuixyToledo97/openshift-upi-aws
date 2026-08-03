@@ -1312,8 +1312,8 @@ recreates it.
 **When a worker does get reclaimed**, the cluster keeps working — you lose
 capacity, not availability, and pods reschedule onto what's left. Nothing in
 the cluster reacts to AWS's 2-minute notice (UPI has no node-termination
-handler), and the `Node` object stays behind as `NotReady` forever because
-nothing removes it. To put things back:
+handler), though the AWS cloud-controller-manager does clean up the orphaned
+`Node` object on its own once the instance is gone. To put the capacity back:
 
 ```bash
 ocplab repair

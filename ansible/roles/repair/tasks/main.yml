@@ -79,19 +79,37 @@
 - name: Work out what Terraform would do
   ansible.builtin.import_tasks: plan.yml
 
-- name: Apply the plan, now that it's known to be safe
+# -target, not a bare apply. This is what keeps repair from resurrecting the
+# bootstrap instance, which is absent from Terraform's state by design once the
+# cluster is up and which a full apply would otherwise recreate — putting a
+# dead node back into the API load balancer's target groups.
+- name: Recreate only the missing workers
   ansible.builtin.include_role:
     name: infra
   vars:
     infra_state: present
+    infra_targets: "{{ repair_planned | map(attribute='addr') | list }}"
   when: repair_planned | length > 0
 
-- name: Approve the new node's CSRs ({{ ocplab_csr_approval_rounds }} rounds)
-  ansible.builtin.include_tasks: ../../finalize/tasks/approve_csr_round.yml
-  loop: "{{ range(1, ocplab_csr_approval_rounds + 1) | list }}"
+# Polled rather than run as a fixed couple of rounds, because a node created
+# right now has not booted yet. Measured on 2026-08-03: the instance launched
+# at 13:31:28 and its first CSR appeared at ~13:35 — finalize's two rounds
+# three minutes apart missed it by about thirty seconds. finalize gets away
+# with a short window because its nodes have been booting throughout the
+# fifteen-minute bootstrap wait; repair has no such head start.
+#
+# Not gated on having created something either: a node from an earlier repair
+# may still be joining, and refusing to approve its CSRs because this run had
+# nothing to build would be exactly the wrong answer.
+- name: Work out how many nodes this cluster should have
+  ansible.builtin.set_fact:
+    repair_nodes_expected: "{{ ocplab_control_plane_replicas | int + ocplab_compute_replicas | int }}"
+
+- name: Approve CSRs until every node is Ready
+  ansible.builtin.include_tasks: csr_round.yml
+  loop: "{{ range(1, repair_csr_rounds + 1) | list }}"
   loop_control:
-    loop_var: finalize_csr_round
-  when: repair_planned | length > 0
+    loop_var: repair_csr_round
 
 - name: Remove the Node objects left behind by instances that no longer exist
   ansible.builtin.import_tasks: prune_nodes.yml
@@ -99,10 +117,10 @@
 - name: Repair summary
   ansible.builtin.debug:
     msg: >-
-      {{ ('Recreated ' + (repair_planned | length | string) + ' instance(s) and approved their CSRs.'
+      {{ ('Recreated ' + (repair_planned | length | string) + ' instance(s).'
           if repair_planned | length > 0
-          else 'Nothing to recreate — Terraform reports no missing infrastructure.')
-      }}
+          else 'Nothing needed recreating.') }}
+      {{ (repair_nodes_ready | default(0)) }}/{{ repair_nodes_expected }} nodes Ready.
       {{ ('Removed ' + (repair_stale_nodes | length | string) + ' stale Node object(s).'
           if repair_stale_nodes | default([]) | length > 0
           else '') }}

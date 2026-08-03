@@ -1,7 +1,13 @@
 ---
-# A terminated instance leaves its Node object behind forever — nothing in the
-# cluster removes it, so it sits there NotReady and shows up in every `oc get
-# nodes` and in 'ocplab verify' as a permanently unhealthy node.
+# A safety net, not the main path. On a healthy cluster the AWS
+# cloud-controller-manager's node lifecycle controller removes the Node object
+# by itself once the instance is gone from EC2 — observed on 2026-08-03, where
+# a terminated worker's Node had already disappeared before repair looked.
+#
+# It stays because that only happens while the CCM is running and able to talk
+# to the AWS API. If it isn't — which is precisely CLAUDE.md trap #1, where a
+# missing cluster tag stops the CCM dead — the Node objects do pile up, and
+# then this is what clears them.
 #
 # Deleted only when BOTH conditions hold: the Node is not Ready, AND no running
 # EC2 instance has that private DNS name. The second check is what makes this

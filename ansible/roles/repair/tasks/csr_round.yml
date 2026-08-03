@@ -1,0 +1,54 @@
+---
+# One polling round: is the cluster whole yet? If not, approve whatever CSRs
+# are pending and wait a little. Rounds after the cluster is complete do
+# nothing, so this exits early rather than always burning its full budget.
+
+# Ansible can't break out of a loop, so the remaining rounds still iterate once
+# the cluster is whole — but skipped tasks cost nothing and the callback hides
+# them, so they don't fill the screen with rounds that had nothing to do.
+- name: "Round {{ repair_csr_round }}/{{ repair_csr_rounds }} — count the Ready nodes"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    kind: Node
+  register: repair_round_nodes
+  when: not (repair_complete | default(false))
+
+- name: "Round {{ repair_csr_round }}/{{ repair_csr_rounds }} — is the cluster whole?"
+  ansible.builtin.set_fact:
+    repair_nodes_ready: >-
+      {{ repair_round_nodes.resources
+         | map(attribute='status.conditions') | map('selectattr', 'type', 'equalto', 'Ready')
+         | map('selectattr', 'status', 'equalto', 'True') | map('list') | select() | list | length }}
+  when: not (repair_complete | default(false))
+
+- name: "Round {{ repair_csr_round }}/{{ repair_csr_rounds }} — stop polling once every node is Ready"
+  ansible.builtin.set_fact:
+    repair_complete: true
+  when:
+    - not (repair_complete | default(false))
+    - repair_nodes_ready | int >= repair_nodes_expected | int
+
+- name: "Round {{ repair_csr_round }}/{{ repair_csr_rounds }} — approve and wait"
+  when: not (repair_complete | default(false))
+  block:
+    # jmespath's [?!status.conditions] silently returns [] when a projection
+    # follows a negated filter — see CLAUDE.md. Compare against null instead.
+    - name: "Round {{ repair_csr_round }}/{{ repair_csr_rounds }} — list pending CSRs"
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        api_version: certificates.k8s.io/v1
+        kind: CertificateSigningRequest
+      register: repair_csr_list
+
+    - name: "Round {{ repair_csr_round }}/{{ repair_csr_rounds }} — approve the pending ones"
+      ansible.builtin.command:
+        cmd: "{{ ocplab_oc_bin }} adm certificate approve {{ item }}"
+      environment:
+        KUBECONFIG: "{{ ocplab_kubeconfig }}"
+      loop: "{{ repair_csr_list.resources | json_query('[?status.conditions == `null`].metadata.name') }}"
+      register: repair_csr_approved
+      changed_when: repair_csr_approved is changed
+
+    - name: "Round {{ repair_csr_round }}/{{ repair_csr_rounds }} — wait for the node to come up"
+      ansible.builtin.pause:
+        seconds: "{{ repair_csr_round_wait_seconds }}"

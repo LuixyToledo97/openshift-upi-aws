@@ -3,6 +3,13 @@
 # cluster that is down, not hang on the Kubernetes client's own timeout.
 repair_api_reachability_timeout: 15
 
+# A cold RHCOS boot takes several minutes before the kubelet asks for its first
+# certificate, and a second CSR follows once the node registers. 20 rounds of
+# 30s is a ten-minute budget — but rounds stop doing anything as soon as every
+# node is Ready, so a fast join costs a couple of rounds, not ten minutes.
+repair_csr_rounds: 20
+repair_csr_round_wait_seconds: 30
+
 # The plan is written next to the run's own log, like every other terraform
 # invocation, so it can be read afterwards when repair refuses to apply it.
 repair_tf_render: "{{ playbook_dir }}/../roles/infra/files/tf_render.py"
