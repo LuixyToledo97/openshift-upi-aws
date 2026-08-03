@@ -1374,7 +1374,7 @@ the whole project turned out to be neither compute nor storage:
 
 Per deploy, measured from the gateway's own CloudWatch metric rather than
 divided out of a monthly bill: **35.2 GB across ten deploys, ≈$1.58 each** —
-what six nodes each pulling their own copy of the OpenShift release payload
+what six nodes each pulling their own images of the OpenShift release payload
 from quay.io costs. The images themselves are free to receive — AWS
 does not charge for inbound data transfer — but a NAT gateway charges per GB
 "regardless of the traffic's source or destination", and the nodes are in a

@@ -19,7 +19,7 @@ ROSA nor IPI.
 - ~$1.06/hour on-demand while it's up in `eu-west-1` — see `ocplab cost`
   for a live, region-aware figure
 - **Plus a per-deploy data charge, which is the biggest line in the project.**
-  The six nodes each pull their own copy of the release payload from quay.io
+  The six nodes each pull their own images from quay.io
   through the NAT gateway. Measured per deploy from the gateway's CloudWatch
   `BytesInFromDestination`: **35.2 GB** across ten deploys (≈$1.58), or
   **24.8 GB** (≈$1.12) with the capability set in `examples/minimal.yaml`.
