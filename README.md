@@ -1301,15 +1301,17 @@ Public IPv4 addresses (1): $0.005/h
 -----------------------------------------------------------
 TOTAL: $0.821/h (~$19.7/day if left running)
 Approximate pricing — excludes data transfer, load balancer LCU
-usage-based charges, and public IPs owned directly by load balancers
-(only allocated Elastic IPs are counted).
+usage-based charges, public IPs owned directly by load balancers (only
+allocated Elastic IPs are counted), and Route 53 (the cluster's private
+hosted zone is $0.50/month, about $0.0007/h, plus per-query charges).
 Spot instances are priced at the current eu-west-1a Spot price, which moves hourly; the rest is on-demand.
 ```
 
 Still an approximation by nature (no tool can be exact without your real
 usage): it excludes data transfer, load balancer LCU usage-based charges,
-and public IPs owned directly by a load balancer (only allocated Elastic
-IPs are counted) — always flagged in the output, never silently assumed.
+public IPs owned directly by a load balancer (only allocated Elastic IPs
+are counted), and Route 53 — always flagged in the output, never silently
+assumed.
 
 The exclusion that matters most is the first one. Per-deploy data transfer is
 the largest single charge in this project — see [The hourly rate is not the

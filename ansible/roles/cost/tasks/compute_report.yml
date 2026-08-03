@@ -68,8 +68,9 @@
       - "-----------------------------------------------------------"
       - "TOTAL: ${{ cost_report.total_hourly }}/h (~${{ (cost_report.total_hourly | float * 24) | round(2) }}/day if left running)"
       - "Approximate pricing — excludes data transfer, load balancer LCU"
-      - "usage-based charges, and public IPs owned directly by load balancers"
-      - "(only allocated Elastic IPs are counted)."
+      - "usage-based charges, public IPs owned directly by load balancers (only"
+      - "allocated Elastic IPs are counted), and Route 53 (the cluster's private"
+      - "hosted zone is $0.50/month, about $0.0007/h, plus per-query charges)."
       - "{{ 'Spot instances are priced at the current ' ~ ocplab_aws_availability_zone ~ ' Spot price, which moves hourly; the rest is on-demand.' if cost_report.spot_instances > 0 else 'All instances are priced on-demand.' }}"
 
 - name: "Warning: some prices couldn't be determined"
