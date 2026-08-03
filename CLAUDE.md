@@ -288,6 +288,12 @@ the project had before. Making it required would force every existing
   how you find the concrete version to write.
 - The RHCOS AMI is discovered from the installer binary itself, so pinning the
   version pins the node image too — one field controls both.
+- **README §2.1.1 is the tested-versions table, and it is a factual record,
+  not a compatibility claim.** A row only goes in after a real end-to-end run
+  against AWS: deploy → verify with every node Ready and every ClusterOperator
+  healthy → ssh → destroy leaving nothing behind. Not "the binary downloaded",
+  not "terraform applied". After any deploy on a version that isn't listed,
+  update it — including the failures, which are the part people actually need.
 
 ## Output and logging
 

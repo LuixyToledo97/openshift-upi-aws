@@ -6,6 +6,14 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- README §2.1.1: a tested-versions table. `ocplab versions list` shows what the
+  mirror publishes, which says nothing about what has actually been run — the
+  table records only versions that completed a real deploy → verify → ssh →
+  destroy cycle against AWS, with the failures that happened along the way.
+  Today that is exactly one version, which is the point of writing it down.
+
 ## [1.1.0] - 2026-08-02
 
 ### Added

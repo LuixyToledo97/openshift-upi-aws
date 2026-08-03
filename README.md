@@ -244,9 +244,40 @@ Each version takes ~795 MB on disk (`ocplab status` shows the total,
 `ocplab versions rm <version>` frees one). Leave `openshift.version` unset and
 nothing changes: the binaries on your PATH are used, exactly as before.
 
-**Only 4.22 has been tested end to end.** Other versions download and run, but
-the workarounds documented in `CLAUDE.md` were found against 4.22 specifically
-— treat anything else as unverified.
+Which versions actually work is a separate question from which ones you can
+download — see [§2.1.1](#211--tested-versions) below.
+
+### 2.1.1 ✅ Tested versions
+
+`ocplab versions list` shows everything the mirror publishes. That is not the
+same as everything that has been *tried*. This table is the honest answer:
+
+| Version | Status | Last verified | Notes |
+|---|---|---|---|
+| **4.22.6** | ✅ Verified | 2026-08-03 | Several full cycles. One bootstrap failure that did not reproduce (see below) |
+| 4.22.7 | ⚪ Untested | — | Downloads and reports its version; never deployed |
+| Anything else | ⚪ Untested | — | Nothing prevents it, nothing confirms it |
+
+**"Verified" means a real end-to-end run against AWS**: `deploy` →
+`verify` reporting every node Ready and every ClusterOperator healthy → `ssh`
+onto a node → `destroy` leaving nothing behind. Not "the binary downloaded",
+and not "terraform applied".
+
+**Why so few.** The four traps documented in `CLAUDE.md` — the `owned` cluster
+tag, etcd DNS discovery, the private zone shadowing the public one, and the
+ingress teardown ordering — were each found the hard way against 4.22. Nothing
+says they still apply unchanged on another minor, and nothing says a new one
+hasn't appeared. Until somebody runs it, "should work" is a guess.
+
+**The one failure worth knowing about**: on 2026-08-02 a 4.22.6 deploy died
+with the bootstrap's `kube-apiserver` crashlooping on its `rbac/bootstrap-roles`
+PostStartHook. A clean retry the same afternoon reached
+`bootstrap-success` with no crashloop at all, so it was transient rather than a
+property of that version. Recorded because "it worked for me" is more useful
+with the exceptions attached.
+
+**If you run another version successfully**, a PR adding a row here is a
+genuinely useful contribution — more so than most code.
 
 ### 2.2 🛠️ Setting up `ocplab`
 
