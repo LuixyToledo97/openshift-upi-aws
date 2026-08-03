@@ -164,9 +164,32 @@
         - not (bootstrap_delete_admin_caller.failed | default(true))
         - bootstrap_iam_user_delete.failed | default(false)
 
+    # 'apply' writes this section into ~/.aws/credentials; without this, only
+    # 'apply' had a counterpart and the section outlived the user it belonged
+    # to — leaving a dead access key on disk forever. The practical damage is
+    # confusion rather than risk: 'aws --profile <name>' then fails with
+    # InvalidClientTokenId, which reads like a broken key rather than a
+    # deliberately deleted one.
+    #
+    # Scoped to --delete-iam-user on purpose. A plain 'bootstrap destroy'
+    # leaves the IAM user alone, so those credentials are still valid and
+    # still needed; removing them would lock the user out of their own lab.
+    # Only the section is removed, never ~/.aws/credentials itself — other
+    # profiles in that file have nothing to do with this project.
+    - name: Remove the now-dead profile from ~/.aws/credentials
+      community.general.ini_file:
+        path: "{{ '~/.aws/credentials' | expanduser }}"
+        section: "{{ ocplab_aws_profile }}"
+        state: absent
+      when:
+        - not (bootstrap_delete_admin_caller.failed | default(true))
+        - not (bootstrap_iam_user_delete.failed | default(false))
+
     - name: Show the result
       ansible.builtin.debug:
-        msg: "IAM user '{{ ocplab_iam_user_name }}': deleted. Your local profile '{{ ocplab_aws_profile }}' credentials no longer work."
+        msg: >-
+          IAM user '{{ ocplab_iam_user_name }}': deleted, and the '{{ ocplab_aws_profile }}'
+          profile removed from ~/.aws/credentials (its key no longer exists).
       when:
         - not (bootstrap_delete_admin_caller.failed | default(true))
         - not (bootstrap_iam_user_delete.failed | default(false))

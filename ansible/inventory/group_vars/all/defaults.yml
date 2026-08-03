@@ -29,9 +29,26 @@ ocplab_iam_user_name: openshift-lab-terraform
 # be archived and regenerated clean.
 ocplab_ignition_max_age_hours: 24
 
-# Wait times (seconds), aligned with scripts/teardown.sh and with the
-# default timeout of "openshift-install wait-for bootstrap-complete".
-ocplab_bootstrap_wait_timeout: 2700
+# Fallbacks for the managed binaries. `ocplab render` overrides these in
+# generated.yml (which wins, being later alphabetically in the same
+# group_vars directory) with absolute paths into ~/.ocplab/bin/<version>
+# whenever cluster.yaml declares openshift.version. The bare names here mean
+# "whatever is on the PATH", which is both the behaviour before versions were
+# manageable and what still applies when no version is declared — so a
+# generated.yml written by an older ocplab doesn't leave these undefined.
+ocplab_openshift_install_bin: openshift-install
+ocplab_oc_bin: oc
+ocplab_openshift_version: ""
+
+# How many times to run "openshift-install wait-for bootstrap-complete"
+# before giving up. NOT a timeout: the ~20-minute limit is internal to
+# openshift-install and can't be extended by any flag, so waiting longer means
+# running it again. It's a monitor, not an action, so re-running is free and
+# reattaches to the cluster's real state. 3 attempts ≈ an hour of patience,
+# which covers a bootstrap slowed down by pulling operator images over NAT.
+ocplab_bootstrap_wait_attempts: 3
+
+# Wait times (seconds), aligned with scripts/teardown.sh.
 ocplab_elb_teardown_timeout: 300
 ocplab_elb_teardown_poll_interval: 10
 # The Classic router ELB disappears from the AWS API almost immediately

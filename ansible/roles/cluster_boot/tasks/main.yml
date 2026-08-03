@@ -8,14 +8,31 @@
 - name: "Tip: how to watch live installer output while this waits"
   ansible.builtin.debug:
     msg: >-
-      This can take 13-20 minutes. To follow the installer's own log live,
+      This can take 13-20 minutes, and up to {{ ocplab_bootstrap_wait_attempts }}
+      attempts of ~20 minutes each. To follow the installer's own log live,
       open another terminal and run: less +F {{ ocplab_install_dir }}/.openshift_install.log
 
+# Retried, not given a longer timeout, because the ~20-minute limit belongs to
+# openshift-install itself ("Waiting up to 20m0s ... for the Kubernetes API")
+# and there is no flag to extend it. Re-running is the supported way to wait
+# longer: wait-for is a monitor, never an action — it reattaches to whatever
+# state the cluster is actually in (see this file's header).
+#
+# Why this matters, seen for real on 2026-08-02: bootstrap spent 21 minutes
+# pulling operator images over the NAT gateway before it could even render the
+# control-plane manifests. The installer gave up at 08:55:55; the manifests
+# landed at 08:56. A perfectly healthy cluster was reported as a failed deploy,
+# one minute short. A lab with no image cache and a single NAT gateway will hit
+# this regularly — it isn't an edge case.
 - name: Wait for the bootstrap to complete (openshift-install wait-for bootstrap-complete)
   ansible.builtin.command:
-    cmd: "openshift-install wait-for bootstrap-complete --dir={{ ocplab_install_dir }} --log-level=info"
+    cmd: "{{ ocplab_openshift_install_bin }} wait-for bootstrap-complete --dir={{ ocplab_install_dir }} --log-level=info"
   environment:
     AWS_PROFILE: "{{ ocplab_aws_profile }}"
+  register: cluster_boot_wait
+  until: cluster_boot_wait.rc == 0
+  retries: "{{ ocplab_bootstrap_wait_attempts }}"
+  delay: 15
   changed_when: false
 
 - name: Destroy the bootstrap instance (no longer needed)

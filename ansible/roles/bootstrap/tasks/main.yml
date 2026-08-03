@@ -80,12 +80,25 @@
   when: bootstrap_problems | length > 0
   tags: always
 
-# Shown last, unconditionally (before the pass/fail assert below, not
-# after — an assert failure would otherwise abort the play and this would
-# never print) — this is the one thing the user actually has to go DO
-# next, so it needs to survive being the last thing on screen, not get
-# buried between the IAM and SSH-key task output above.
-- name: "apply: NS delegation notice — ACTION REQUIRED"
+# Shown last (before the pass/fail assert below, not after — an assert
+# failure would otherwise abort the play and this would never print) —
+# this is the one thing the user actually has to go DO next, so it needs
+# to survive being the last thing on screen, not get buried between the
+# IAM and SSH-key task output above.
+#
+# Runs for 'status' too, not just 'apply': the zone ID is exactly what
+# someone needs to paste into cluster.yaml, and 'status' was the natural
+# place to look for it while the enclosing block already gathered it
+# ("apply/status: show the zone and its nameservers") — it just had
+# nothing that printed it. The wording differs because on 'status' the
+# delegation may well already be done, so the ACTION REQUIRED banner would
+# be crying wolf.
+#
+# The apply/status distinction is compared inline rather than hoisted into
+# a `vars:` boolean on purpose: a var set to `{{ x == 'y' }}` arrives as
+# the STRING "False", which is truthy in Jinja and would silently pick the
+# 'apply' branch every time.
+- name: "apply/status: hosted zone summary and NS delegation notice"
   vars:
     # Plain spaces, not '\t' — found the hard way: Ansible's default
     # callback doesn't render tab escapes as real tabs in a debug msg
@@ -96,19 +109,26 @@
     msg: >-
       {{
         ['', '=' * 70,
-         '⚠️  ACTION REQUIRED before running ocplab preflight/deploy',
+         ('⚠️  ACTION REQUIRED before running ocplab preflight/deploy'
+          if ocplab_bootstrap_action == 'apply'
+          else ('Public hosted zone for ' + ocplab_base_domain)),
          '=' * 70, '',
-         'Delegate ' + ocplab_base_domain + ' at your registrar with exactly these 4 NS records:',
+         ('Delegate ' + ocplab_base_domain + ' at your registrar with exactly these 4 NS records:'
+          if ocplab_bootstrap_action == 'apply'
+          else 'Delegation must point at exactly these 4 NS records:'),
          ''] + bootstrap_ns_table + ['',
          (('Zone ID ' + bootstrap_zone_summary.zone_id + ' matches cluster.yaml.')
           if bootstrap_zone_summary.matches_cluster_yaml
-          else ('Zone ID changed — update cluster.yaml: platform.aws.publicHostedZoneId: ' + bootstrap_zone_summary.zone_id)),
-         '',
-         'Then wait for propagation (minutes to ~1h) before continuing.',
-         '=' * 70, '']
+          else ('Zone ID differs from cluster.yaml — set platform.aws.publicHostedZoneId: '
+                + bootstrap_zone_summary.zone_id)),
+         '']
+        + (['Then wait for propagation (minutes to ~1h) before continuing.', '']
+           if ocplab_bootstrap_action == 'apply'
+           else ["Run 'ocplab preflight' to check the delegation has propagated.", ''])
+        + ['=' * 70, '']
       }}
   when:
-    - ocplab_bootstrap_action == 'apply'
+    - ocplab_bootstrap_action in ['apply', 'status']
     - bootstrap_zone_summary is defined
 
 - name: Bootstrap passed

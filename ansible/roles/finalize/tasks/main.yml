@@ -2,12 +2,32 @@
 # finalize: everything that doesn't approve/clean itself up in UPI
 # (README §5, steps 5, 5.5, and 6). Requires an API server that's already
 # responding — makes no sense before 'cluster_boot' finishes.
+#
+# Every task here is skipped under --check, and the whole role is guarded
+# rather than individual tasks, because there is no meaningful preview to
+# give: under --check nothing earlier in the play actually ran, so the
+# cluster these tasks address does not exist. Without this, `ocplab
+# --dry-run deploy` always ended in a DNS resolution failure on the first
+# CSR lookup — a command documented as previewing without changing anything
+# could never finish successfully.
+#
+# kubernetes.core modules are the reason this needs saying explicitly:
+# unlike command/shell, they are not skipped automatically under --check.
+
+- name: "Nothing to preview here (--dry-run)"
+  ansible.builtin.debug:
+    msg: >-
+      finalize skipped: CSR approval, disabling the ControlPlaneMachineSet,
+      wait-for install-complete and the custom certificates all act on a
+      running cluster, which a dry run never created.
+  when: ansible_check_mode
 
 - name: "Approve the workers' CSRs ({{ ocplab_csr_approval_rounds }} rounds)"
   ansible.builtin.include_tasks: approve_csr_round.yml
   loop: "{{ range(1, ocplab_csr_approval_rounds + 1) | list }}"
   loop_control:
     loop_var: finalize_csr_round
+  when: not ansible_check_mode
 
 # In UPI there are no Machine objects for the masters (Terraform created
 # them), so the CPMS can never satisfy its replicas and stays Degraded,
@@ -22,21 +42,25 @@
     kind: ControlPlaneMachineSet
     name: cluster
     namespace: openshift-machine-api
+  when: not ansible_check_mode
 
 - name: "Tip: how to watch live installer output while this waits"
   ansible.builtin.debug:
     msg: >-
       To follow the installer's own log live, open another terminal and
       run: less +F {{ ocplab_install_dir }}/.openshift_install.log
+  when: not ansible_check_mode
 
 - name: Wait for the installation to finish (openshift-install wait-for install-complete)
   ansible.builtin.command:
-    cmd: "openshift-install wait-for install-complete --dir={{ ocplab_install_dir }} --log-level=info"
+    cmd: "{{ ocplab_openshift_install_bin }} wait-for install-complete --dir={{ ocplab_install_dir }} --log-level=info"
   environment:
     AWS_PROFILE: "{{ ocplab_aws_profile }}"
   changed_when: false
+  when: not ansible_check_mode
 
 # Always a post-install step (see custom_certificates.yml) — deliberately
 # after wait-for above, not before.
 - name: Custom TLS certs for the API and *.apps, if configured
   ansible.builtin.import_tasks: custom_certificates.yml
+  when: not ansible_check_mode
