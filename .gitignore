@@ -15,6 +15,10 @@ archive/
 terraform/terraform.tfvars
 ansible/inventory/group_vars/all/generated.yml
 
+# Per-run Ansible execution logs written by `ocplab` — they contain live AWS
+# identifiers and cluster internals, and are local history, not source.
+logs/
+
 __pycache__/
 *.pyc
 .venv/
