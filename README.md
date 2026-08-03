@@ -255,7 +255,7 @@ same as everything that has been *tried*. This table is the honest answer:
 | Version | Status | Last verified | Notes |
 |---|---|---|---|
 | **4.22.6** | ✅ Verified | 2026-08-03 | Several full cycles. One bootstrap failure that did not reproduce (see below) |
-| 4.22.7 | ⚪ Untested | — | Downloads and reports its version; never deployed |
+| **4.22.7** | ✅ Verified | 2026-08-03 | Deploy, verify and `ssh` identical to 4.22.6. `destroy` needed a second run, for a bug that was not version-specific (see below) |
 | Anything else | ⚪ Untested | — | Nothing prevents it, nothing confirms it |
 
 **"Verified" means a real end-to-end run against AWS**: `deploy` →
@@ -275,6 +275,17 @@ PostStartHook. A clean retry the same afternoon reached
 `bootstrap-success` with no crashloop at all, so it was transient rather than a
 property of that version. Recorded because "it worked for me" is more useful
 with the exceptions attached.
+
+**And the one on 4.22.7**: `destroy` failed with `DependencyViolation` on the
+internet gateway, because the ingress-operator had recreated the router's ELB
+after the teardown deleted it — a latent bug that earlier teardowns had simply
+raced past, not anything to do with the version. A second `ocplab destroy`
+cleaned it up (the role is idempotent, which is why re-running is the
+documented response), and the operators are now stopped before the
+IngressController is deleted so the race can't happen.
+
+Timings were within seconds of 4.22.6 across every phase, which is the boring
+result you want from a version bump.
 
 **If you run another version successfully**, a PR adding a row here is a
 genuinely useful contribution — more so than most code.

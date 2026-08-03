@@ -6,6 +6,22 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `destroy` could fail with `DependencyViolation` on the internet gateway
+  because the ingress router's ELB came back after being deleted. Deleting the
+  default `IngressController` doesn't remove it — the cluster-ingress-operator
+  reconciles it straight back, along with a new Classic ELB, and that ELB's
+  ENIs hold the public subnet. Seen on 2026-08-03: deleted at 10:48:43, the
+  ELB poll correctly saw zero at 10:48:48, and a replacement appeared at
+  10:50:08, blocking the teardown until terraform gave up 20 minutes later.
+
+  Earlier teardowns had won that race against the masters being terminated
+  rather than avoided it. `teardown` now scales `cluster-version-operator` and
+  then `ingress-operator` to zero before deleting anything — the CVO first, or
+  it scales the other back up — and re-checks afterwards instead of trusting
+  that "zero now" means "zero from here on". Not version-specific.
+
 ### Added
 
 - README §2.1.1: a tested-versions table. `ocplab versions list` shows what the

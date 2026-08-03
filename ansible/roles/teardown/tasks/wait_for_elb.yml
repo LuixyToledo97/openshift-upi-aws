@@ -29,3 +29,41 @@
   ansible.builtin.pause:
     seconds: 20
   when: teardown_remaining_elbs | length > 0
+
+# "Zero right now" is not the same as "zero from here on". On 2026-08-03 the
+# poll above legitimately saw zero five seconds after the IngressController was
+# deleted, and a replacement ELB appeared eighty seconds later — created by the
+# ingress-operator, which reconciled the resource straight back. That one held
+# the public subnet and the internet gateway until terraform gave up.
+#
+# delete_ingresscontroller.yml now stops the operators first, so this should
+# never find anything. It is kept as the check that says so, rather than as an
+# assumption: the cost of being wrong is twenty minutes of terraform retries
+# followed by a manual cleanup, and the cost of confirming is one API call.
+- name: Confirm no ELB reappeared once the cluster stopped reconciling
+  amazon.aws.elb_classic_lb_info:
+    profile: "{{ ocplab_aws_profile }}"
+  register: teardown_elb_recheck
+  until: (teardown_elb_recheck.elbs | selectattr('vpc_id', 'equalto', teardown_vpc_id) | list) | length == 0
+  retries: 6
+  delay: 10
+  ignore_errors: true
+
+- name: Delete anything that came back
+  amazon.aws.elb_classic_lb:
+    profile: "{{ ocplab_aws_profile }}"
+    name: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ teardown_elb_recheck.elbs | default([]) | selectattr('vpc_id', 'equalto', teardown_vpc_id)
+       | map(attribute='load_balancer_name') | list }}
+  register: teardown_elb_recreated
+
+- name: Warn if an ELB had to be removed a second time
+  ansible.builtin.debug:
+    msg: >-
+      An ingress ELB was recreated after the first cleanup and had to be deleted
+      again — the ingress-operator was still running. Worth investigating if this
+      recurs; the teardown handled it, but it means the operator shutdown didn't
+      take effect.
+  when: teardown_elb_recreated.changed | default(false)

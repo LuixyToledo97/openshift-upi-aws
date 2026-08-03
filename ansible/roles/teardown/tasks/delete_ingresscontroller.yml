@@ -1,4 +1,51 @@
 ---
+# Deleting the default IngressController does NOT remove it: the
+# cluster-ingress-operator reconciles it straight back, and creates a fresh
+# Classic ELB with it. Seen for real on 2026-08-03 — the IngressController was
+# deleted at 10:48:43, the poll below correctly saw zero ELBs at 10:48:48, and
+# the operator created a new one at 10:50:08, whose ENIs then held the public
+# subnet and the internet gateway until terraform gave up 20 minutes later.
+#
+# Earlier teardowns survived this by luck: the race is between the operator
+# recreating the ELB and terraform terminating the masters, and it had simply
+# been won the other way every time until then.
+#
+# So the operators are stopped first, closing the window instead of racing it.
+# The CVO goes first because it would otherwise scale the ingress-operator
+# straight back up.
+#
+# Everything here is best-effort: 'ocplab destroy' has to work against a
+# cluster that is already gone, half-installed, or was never reachable — in
+# which case there is no operator to stop and nothing to delete, and the ELB
+# cleanup below handles whatever AWS still has.
+
+- name: Stop the operators that would recreate the ingress ELB
+  kubernetes.core.k8s_scale:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ item.name }}"
+    namespace: "{{ item.namespace }}"
+    replicas: 0
+    wait: true
+    wait_timeout: 60
+  loop:
+    - { name: cluster-version-operator, namespace: openshift-cluster-version }
+    - { name: ingress-operator, namespace: openshift-ingress-operator }
+  loop_control:
+    label: "{{ item.name }}"
+  register: teardown_operators_scaled
+  ignore_errors: true
+
+- name: Show whether the operators were stopped
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'cluster-version-operator and ingress-operator scaled to 0 — the ingress ELB
+          will stay deleted'
+         if not (teardown_operators_scaled.failed | default(true))
+         else 'could not scale the operators down (cluster not responding?) — continuing;
+               any ELB left behind is deleted directly below' }}
+
 - name: Delete the default ingresscontroller (if the cluster responds)
   kubernetes.core.k8s:
     state: absent

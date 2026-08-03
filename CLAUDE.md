@@ -169,6 +169,17 @@ Already fixed in the code — if something breaks, check here first:
    `sleep`) that the router ELB, its ENIs, and the `k8s-elb-*` security
    group actually disappear. Otherwise the destroy fails with
    `DependencyViolation` on the IGW and the public subnet.
+   - **Deleting the IngressController does not remove it — the
+     cluster-ingress-operator reconciles it straight back**, and creates a new
+     Classic ELB with it. Found on 2026-08-03: deleted at 10:48:43, the ELB
+     poll correctly saw zero at 10:48:48, and a replacement appeared at
+     10:50:08, holding the IGW until terraform gave up 20 minutes later.
+     Earlier teardowns had simply won the race against the masters being
+     terminated. `delete_ingresscontroller.yml` therefore scales
+     `cluster-version-operator` **and then** `ingress-operator` to zero before
+     deleting anything — the CVO first, or it scales the ingress-operator back
+     up. `wait_for_elb.yml` re-checks afterwards rather than trusting that
+     "zero now" means "zero from here on".
    - The router ELB **is not** called `k8s-elb-*` (that's its security
      group): it has a hash-based name, so filter by `VPCId`, never by name.
    - **The ELB disappearing from the AWS API is not the same as its ENIs
