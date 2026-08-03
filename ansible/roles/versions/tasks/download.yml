@@ -1,0 +1,134 @@
+---
+# download: fetch and verify one version's binaries into the local cache.
+
+- name: A version is required
+  ansible.builtin.assert:
+    that:
+      - ocplab_versions_target | default('') | length > 0
+      - ocplab_versions_target is match('^\d+\.\d+\.\d+$')
+    fail_msg: >-
+      'ocplab versions download' needs an exact version such as 4.22.6 (got
+      '{{ ocplab_versions_target | default("") }}'). Either pass one, or set
+      openshift.version in cluster.yaml and run it with no argument. See
+      'ocplab versions list'.
+
+- name: Check whether this version is already downloaded
+  ansible.builtin.stat:
+    path: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}/openshift-install"
+  register: versions_already
+
+- name: Already present, nothing to do
+  ansible.builtin.debug:
+    msg: >-
+      OpenShift {{ ocplab_versions_target }} is already in
+      {{ versions_bin_cache }}/{{ ocplab_versions_target }} — nothing downloaded.
+  when: versions_already.stat.exists
+
+- name: Download and unpack
+  when: not versions_already.stat.exists
+  block:
+    - name: Announce the size, since this is the slow part
+      ansible.builtin.debug:
+        msg: >-
+          Downloading OpenShift {{ ocplab_versions_target }} — ~476 MB compressed,
+          ~795 MB once unpacked. Cached afterwards, so this happens once per version.
+
+    # A 404 here is the real check that the version exists — the mirror answers
+    # cleanly for anything it doesn't publish, so there's no need to validate
+    # the version against a list first.
+    - name: Confirm the version exists upstream
+      ansible.builtin.uri:
+        url: "{{ ocplab_mirror_base }}/{{ ocplab_versions_target }}/sha256sum.txt"
+        method: HEAD
+        timeout: 30
+      register: versions_exists
+      failed_when: false
+
+    - name: Fail clearly if it doesn't
+      ansible.builtin.assert:
+        that: versions_exists.status | default(0) == 200
+        fail_msg: >-
+          OpenShift {{ ocplab_versions_target }} isn't published at
+          {{ ocplab_mirror_base }}/{{ ocplab_versions_target }}/ (HTTP
+          {{ versions_exists.status | default('no response') }}). Run 'ocplab versions
+          list' to see what's available.
+
+    - name: Somewhere to unpack into
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: ocplab-versions-
+      register: versions_tmp
+
+    # checksum with a URL: get_url downloads sha256sum.txt and looks up the
+    # line for this filename itself, so the tarballs are verified rather than
+    # trusted — and a partial or tampered download fails here, not later as a
+    # confusing binary error.
+    - name: Fetch and verify the tarballs
+      ansible.builtin.get_url:
+        url: "{{ ocplab_mirror_base }}/{{ ocplab_versions_target }}/{{ item }}"
+        dest: "{{ versions_tmp.path }}/{{ item }}"
+        checksum: "sha256:{{ ocplab_mirror_base }}/{{ ocplab_versions_target }}/sha256sum.txt"
+        timeout: "{{ ocplab_versions_download_timeout }}"
+        mode: "0600"
+      loop: "{{ ocplab_versions_tarballs }}"
+
+    - name: Create the version's directory
+      ansible.builtin.file:
+        path: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}"
+        state: directory
+        mode: "0755"
+
+    - name: Unpack them
+      ansible.builtin.unarchive:
+        src: "{{ versions_tmp.path }}/{{ item }}"
+        dest: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}"
+        remote_src: true
+      loop: "{{ ocplab_versions_tarballs }}"
+
+    - name: Check the binaries actually arrived
+      ansible.builtin.stat:
+        path: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}/{{ item }}"
+      loop: [openshift-install, oc, kubectl]
+      register: versions_binaries
+
+    - name: Fail if any is missing or not executable
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.executable | default(false)
+        fail_msg: >-
+          '{{ item.item }}' is missing or not executable after unpacking
+          {{ ocplab_versions_target }}. The download may be corrupt — remove
+          {{ versions_bin_cache }}/{{ ocplab_versions_target }} and try again.
+      loop: "{{ versions_binaries.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Confirm the version the binary reports
+      ansible.builtin.command:
+        cmd: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}/openshift-install version"
+      register: versions_reported
+      changed_when: false
+
+    # Guards against a mirror path that serves something other than what its
+    # directory name claims — cheap to check, and impossible to spot later.
+    - name: Fail if the binary isn't the version that was asked for
+      ansible.builtin.assert:
+        that: versions_reported.stdout is search(ocplab_versions_target)
+        fail_msg: >-
+          Downloaded {{ ocplab_versions_target }} but the binary reports
+          '{{ versions_reported.stdout_lines | first | default("?") }}'.
+
+    - name: Clean up the tarballs
+      ansible.builtin.file:
+        path: "{{ versions_tmp.path }}"
+        state: absent
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: >-
+          OpenShift {{ ocplab_versions_target }} downloaded to
+          {{ versions_bin_cache }}/{{ ocplab_versions_target }}.
+          {{ "It's the version cluster.yaml declares, so it will be used from now on."
+             if ocplab_versions_target == (ocplab_openshift_version | default(''))
+             else "Set 'openshift.version: " + ocplab_versions_target + "' in cluster.yaml to use it." }}

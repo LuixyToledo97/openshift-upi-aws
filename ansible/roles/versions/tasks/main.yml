@@ -1,0 +1,16 @@
+---
+# versions: manage the cached OpenShift binaries — list what exists upstream
+# and locally, download a version, remove one.
+#
+# This is the role behind 'ocplab versions'. The downloading lives here rather
+# than in the CLI for the usual reason (see CLAUDE.md): get_url and unarchive
+# already give checksum verification and idempotency, and a 476 MB download
+# benefits from the per-run log and readable output every playbook gets.
+
+- name: Expand the local paths once
+  ansible.builtin.set_fact:
+    versions_bin_cache: "{{ ocplab_bin_cache | expanduser }}"
+    versions_cache_file: "{{ ocplab_versions_cache_file | expanduser }}"
+
+- name: "Run the requested action: {{ ocplab_versions_action }}"
+  ansible.builtin.include_tasks: "{{ ocplab_versions_action }}.yml"

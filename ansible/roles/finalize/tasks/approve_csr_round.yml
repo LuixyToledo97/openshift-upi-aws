@@ -27,7 +27,7 @@
 # Same underlying flakiness can happen here too, so fixed the same way.
 - name: "Round {{ finalize_csr_round }}/{{ ocplab_csr_approval_rounds }} — approve the pending ones"
   ansible.builtin.command:
-    cmd: "oc adm certificate approve {{ item }}"
+    cmd: "{{ ocplab_oc_bin }} adm certificate approve {{ item }}"
   environment:
     KUBECONFIG: "{{ ocplab_kubeconfig }}"
   loop: "{{ finalize_csr_list.resources | json_query(finalize_pending_csr_query) }}"

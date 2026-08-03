@@ -29,7 +29,7 @@
 # repo (kube-apiserver rolling revisions after a servingCerts change).
 - name: "CSR round {{ power_csr_round }}/{{ ocplab_csr_approval_rounds }} — approve the pending ones"
   ansible.builtin.command:
-    cmd: "oc adm certificate approve {{ item }}"
+    cmd: "{{ ocplab_oc_bin }} adm certificate approve {{ item }}"
   environment:
     KUBECONFIG: "{{ ocplab_kubeconfig }}"
   loop: "{{ power_csr_list.resources | json_query(power_pending_csr_query) }}"

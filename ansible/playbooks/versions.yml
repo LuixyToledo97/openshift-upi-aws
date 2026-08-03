@@ -1,0 +1,6 @@
+---
+- name: ocplab versions — manage the cached OpenShift binaries
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - versions

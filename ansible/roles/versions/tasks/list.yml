@@ -1,0 +1,139 @@
+---
+# list: what's published upstream, what's already on this machine, and which
+# version cluster.yaml declares.
+
+- name: Look for a usable cached listing
+  ansible.builtin.stat:
+    path: "{{ versions_cache_file }}"
+  register: versions_cache_stat
+
+# now() rather than ansible_date_time: the playbooks run with gather_facts
+# off, so that fact isn't there to compare against.
+- name: Decide whether to refresh
+  ansible.builtin.set_fact:
+    versions_cache_fresh: >-
+      {{ versions_cache_stat.stat.exists
+         and not (ocplab_versions_refresh | default(false) | bool)
+         and ((now(utc=true).strftime('%s') | int) - (versions_cache_stat.stat.mtime | int))
+             < (ocplab_versions_cache_max_age_hours | int * 3600) }}
+
+- name: Read the cached listing
+  ansible.builtin.set_fact:
+    versions_upstream: "{{ (lookup('ansible.builtin.file', versions_cache_file) | from_json).channels }}"
+  when: versions_cache_fresh | bool
+
+- name: Refresh the listing from the mirror
+  when: not (versions_cache_fresh | bool)
+  block:
+    # Discovered rather than hardcoded: a hardcoded channel list goes stale
+    # silently the moment Red Hat ships a new minor.
+    - name: Fetch the mirror's directory listing
+      ansible.builtin.uri:
+        url: "{{ ocplab_mirror_base }}/"
+        return_content: true
+        timeout: 30
+      register: versions_listing
+      failed_when: false
+
+    - name: Work out which channels to offer
+      ansible.builtin.set_fact:
+        versions_channels: >-
+          {{ (versions_listing.content | default('')
+              | regex_findall('href="stable-4\.(\d+)/"')
+              | map('int') | unique | select('ge', ocplab_versions_min_minor | int)
+              | list | sort(reverse=true)
+              | map('string') | map('regex_replace', '^', 'stable-4.') | list)
+             + ocplab_versions_extra_channels }}
+
+    - name: Fail clearly if the mirror couldn't be listed
+      ansible.builtin.assert:
+        that: versions_channels | length > ocplab_versions_extra_channels | length
+        fail_msg: >-
+          Could not read the channel list from {{ ocplab_mirror_base }}/
+          (HTTP {{ versions_listing.status | default('no response') }}). 'ocplab versions
+          list' needs network the first time; anything already downloaded keeps
+          working offline.
+
+    # release.txt gives the concrete version a channel points at right now.
+    - name: Resolve each channel to a concrete version
+      ansible.builtin.uri:
+        url: "{{ ocplab_mirror_base }}/{{ item }}/release.txt"
+        return_content: true
+        timeout: 30
+      loop: "{{ versions_channels }}"
+      register: versions_release_txt
+      failed_when: false
+
+    # The tarball's Last-Modified is the publication date. A channel that
+    # hasn't moved in many months is effectively past its support window —
+    # worth seeing before picking a version to run a cluster on.
+    - name: Read each channel's publication date
+      ansible.builtin.uri:
+        url: "{{ ocplab_mirror_base }}/{{ item }}/openshift-install-linux.tar.gz"
+        method: HEAD
+        timeout: 30
+      loop: "{{ versions_channels }}"
+      register: versions_head
+      failed_when: false
+
+    - name: Assemble the listing
+      ansible.builtin.set_fact:
+        versions_upstream: >-
+          {{ versions_upstream | default([]) + [{
+               'channel': item.0.item,
+               'version': (item.0.content | default('') | regex_search('Name:\s+(\S+)', '\1')
+                           | default(['?'], true) | first),
+               'released': (item.1.last_modified | default('')
+                            | regex_replace('^\w+, (\d+ \w+ \d+).*', '\1'))
+             }] }}
+      loop: "{{ versions_release_txt.results | zip(versions_head.results) | list }}"
+      loop_control:
+        label: "{{ item.0.item }}"
+      when: item.0.status | default(0) == 200
+
+    - name: Cache it
+      ansible.builtin.copy:
+        content: "{{ {'channels': versions_upstream | default([])} | to_nice_json }}"
+        dest: "{{ versions_cache_file }}"
+        mode: "0600"
+      # Losing the cache costs a refetch, nothing more — never fail over it.
+      failed_when: false
+
+- name: List what's already downloaded
+  ansible.builtin.find:
+    paths: "{{ versions_bin_cache }}"
+    file_type: directory
+    recurse: false
+  register: versions_local
+  failed_when: false
+
+- name: Note the downloaded versions
+  ansible.builtin.set_fact:
+    versions_cached: "{{ versions_local.files | default([]) | map(attribute='path') | map('basename') | list }}"
+
+- name: Format one row per version
+  ansible.builtin.set_fact:
+    versions_rows: >-
+      {{ versions_rows | default([]) + [
+           ('  ' ~ ('*' if item.version == (ocplab_openshift_version | default('')) else ' ')
+            ~ ' ' ~ item.version.ljust(10)
+            ~ ' ' ~ item.channel.ljust(14)
+            ~ ' ' ~ item.released.ljust(14)
+            ~ ' ' ~ ('yes' if item.version in versions_cached else 'no'))
+         ] }}
+  loop: "{{ versions_upstream | default([]) }}"
+  loop_control:
+    label: "{{ item.version }}"
+
+- name: Show the versions
+  ansible.builtin.debug:
+    msg: >-
+      {{ ['    VERSION    CHANNEL        RELEASED       CACHED',
+          '    ---------- -------------- -------------- ------']
+         + (versions_rows | default(['    (nothing to show)']))
+         + ['',
+            ('  * = declared in cluster.yaml'
+             if (ocplab_openshift_version | default(''))
+             else '  cluster.yaml declares no openshift.version — the binaries on your PATH are used.'),
+            '  Downloaded versions live in ' + versions_bin_cache,
+            "  Download one with: ocplab versions download <version>"] }}

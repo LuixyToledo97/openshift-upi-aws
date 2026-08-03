@@ -1,7 +1,16 @@
 ---
+# Which binaries have to be on the PATH depends on whether a version is
+# pinned: with one, openshift-install and oc are managed under
+# ~/.ocplab/bin/<version> and checked separately below.
+- name: Work out which binaries must be on the PATH
+  ansible.builtin.set_fact:
+    preflight_binaries: >-
+      {{ preflight_required_binaries
+         + ([] if (ocplab_openshift_version | default('')) else preflight_path_binaries_without_pinned_version) }}
+
 - name: Check that the required binaries are on the PATH
   ansible.builtin.command: "which {{ item }}"
-  loop: "{{ preflight_required_binaries }}"
+  loop: "{{ preflight_binaries }}"
   register: preflight_which
   changed_when: false
   failed_when: false
@@ -14,6 +23,49 @@
     loop_var: bin_check
     label: "{{ bin_check.item }}"
   when: bin_check.rc != 0
+
+# Checked, not assumed: render already refuses to run when the pinned version
+# isn't downloaded, but preflight is the command people run to find out whether
+# a deploy will work — it should answer that question itself.
+- name: "Pinned version: check the managed binaries are downloaded"
+  when: ocplab_openshift_version | default('') | length > 0
+  block:
+    - name: Look for the pinned version's binaries
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ ocplab_openshift_install_bin }}"
+        - "{{ ocplab_oc_bin }}"
+      register: preflight_managed_bins
+
+    - name: Record a problem if the pinned version isn't downloaded
+      ansible.builtin.set_fact:
+        preflight_problems: "{{ preflight_problems + ['binaries: OpenShift ' + ocplab_openshift_version + ' is pinned in cluster.yaml but ' + bin_stat.item + \" isn't there — run 'ocplab versions download \" + ocplab_openshift_version + \"'\"] }}"
+      loop: "{{ preflight_managed_bins.results }}"
+      loop_control:
+        loop_var: bin_stat
+        label: "{{ bin_stat.item }}"
+      when: not bin_stat.stat.exists
+
+    # A stale binary on the PATH is the confusing failure mode this warns
+    # about: ocplab uses the pinned one, but anything the user types by hand
+    # in a shell without the venv active still resolves to the old one.
+    - name: See what version is on the PATH, if any
+      ansible.builtin.command: openshift-install version
+      register: preflight_path_installer
+      changed_when: false
+      failed_when: false
+
+    - name: Warn when the PATH binary is a different version
+      ansible.builtin.debug:
+        msg: >-
+          Note: openshift-install on your PATH reports
+          '{{ preflight_path_installer.stdout_lines | first | default('?') }}', but
+          cluster.yaml pins {{ ocplab_openshift_version }}. ocplab uses the pinned one;
+          the PATH copy is only what you'd get typing the command yourself outside the venv.
+      when:
+        - preflight_path_installer.rc == 0
+        - not (preflight_path_installer.stdout is search(ocplab_openshift_version))
 
 - name: Get the installed terraform version
   ansible.builtin.command: terraform version -json

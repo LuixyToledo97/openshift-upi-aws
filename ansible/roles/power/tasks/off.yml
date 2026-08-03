@@ -39,7 +39,7 @@
 
 - name: Cordon every node
   ansible.builtin.command:
-    cmd: "oc adm cordon {{ item }}"
+    cmd: "{{ ocplab_oc_bin }} adm cordon {{ item }}"
   environment:
     KUBECONFIG: "{{ ocplab_kubeconfig }}"
   loop: "{{ power_master_node_names + power_worker_node_names }}"
@@ -47,7 +47,7 @@
 - name: Drain worker nodes (masters don't need it — standard cluster pods only)
   ansible.builtin.command:
     cmd: >-
-      oc adm drain {{ item }} --delete-emptydir-data --ignore-daemonsets=true
+      {{ ocplab_oc_bin }} adm drain {{ item }} --delete-emptydir-data --ignore-daemonsets=true
       --force --timeout=120s
   environment:
     KUBECONFIG: "{{ ocplab_kubeconfig }}"
@@ -58,7 +58,7 @@
 # failure, hence failed_when: false.
 - name: Shut down the workers (in-guest shutdown, graceful)
   ansible.builtin.command:
-    cmd: "oc debug node/{{ item }} -- chroot /host shutdown -h 1"
+    cmd: "{{ ocplab_oc_bin }} debug node/{{ item }} -- chroot /host shutdown -h 1"
   environment:
     KUBECONFIG: "{{ ocplab_kubeconfig }}"
   loop: "{{ power_worker_node_names }}"
@@ -77,7 +77,7 @@
 
 - name: Shut down the masters (last — the control plane holds the API VIP)
   ansible.builtin.command:
-    cmd: "oc debug node/{{ item }} -- chroot /host shutdown -h 1"
+    cmd: "{{ ocplab_oc_bin }} debug node/{{ item }} -- chroot /host shutdown -h 1"
   environment:
     KUBECONFIG: "{{ ocplab_kubeconfig }}"
   loop: "{{ power_master_node_names }}"

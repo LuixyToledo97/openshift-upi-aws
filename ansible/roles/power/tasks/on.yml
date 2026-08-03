@@ -103,7 +103,7 @@
 
 - name: Uncordon every node
   ansible.builtin.command:
-    cmd: "oc adm uncordon {{ item }}"
+    cmd: "{{ ocplab_oc_bin }} adm uncordon {{ item }}"
   environment:
     KUBECONFIG: "{{ ocplab_kubeconfig }}"
   loop: "{{ power_master_node_names + power_worker_node_names }}"

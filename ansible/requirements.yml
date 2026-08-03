@@ -2,7 +2,10 @@
 # Collections needed by the ocplab roles.
 # Install with: ansible-galaxy collection install -r ansible/requirements.yml
 collections:
-  - name: community.general   # terraform module (infra role)
+  # dig lookup (preflight DNS check), ini_file (bootstrap IAM credentials),
+  # archive (safety_net lambda zip). NOT the terraform module any more — the
+  # infra role runs terraform directly, to stream its progress.
+  - name: community.general
     version: ">=8.0.0"
   - name: amazon.aws          # preflight, safety_net (budgets, lambda, scheduler)
     version: ">=7.0.0"

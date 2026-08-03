@@ -54,13 +54,13 @@
 # accept --profile (it uses the AWS SDK directly). See README §2.1.
 - name: Generate the manifests (consumes and deletes install-config.yaml)
   ansible.builtin.command:
-    cmd: "openshift-install create manifests --dir={{ ocplab_install_dir }}"
+    cmd: "{{ ocplab_openshift_install_bin }} create manifests --dir={{ ocplab_install_dir }}"
   environment:
     AWS_PROFILE: "{{ ocplab_aws_profile }}"
 
 - name: Generate the Ignition configs
   ansible.builtin.command:
-    cmd: "openshift-install create ignition-configs --dir={{ ocplab_install_dir }}"
+    cmd: "{{ ocplab_openshift_install_bin }} create ignition-configs --dir={{ ocplab_install_dir }}"
   environment:
     AWS_PROFILE: "{{ ocplab_aws_profile }}"
 

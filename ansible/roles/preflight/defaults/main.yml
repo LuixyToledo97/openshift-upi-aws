@@ -3,9 +3,15 @@
 # versions can be pinned separately (see preflight_min_terraform_version)
 # because each one exposes its version differently (terraform, aws,
 # openshift-install, oc).
+# openshift-install and oc are only required on the PATH when cluster.yaml
+# declares no openshift.version. With a version pinned they come from
+# ~/.ocplab/bin/<version> instead, and requiring them on the PATH as well
+# would fail a perfectly valid setup — binaries.yml adds them conditionally.
 preflight_required_binaries:
   - terraform
   - aws
+
+preflight_path_binaries_without_pinned_version:
   - openshift-install
   - oc
 

@@ -1,0 +1,33 @@
+---
+# Where the OpenShift client tooling is published. The 'latest' segment in
+# README §2.1's download URL is just a directory name — every version and
+# channel lives as a sibling of it, which is what makes pinning possible.
+ocplab_mirror_base: https://mirror.openshift.com/pub/openshift-v4/clients/ocp
+
+# Only stable-X.Y channels (plus 'latest') are offered. 'candidate-*' are
+# unsupported pre-release builds and 'fast-*' runs ahead of stable — neither
+# belongs in a lab that is supposed to be reproducible.
+ocplab_versions_extra_channels:
+  - latest
+
+# The mirror publishes stable channels back to 4.1, which are years past end
+# of life and would bury the useful rows. Raise this to shorten the list.
+ocplab_versions_min_minor: 14
+
+# The listing is a handful of HTTP requests, so it's cached the same way the
+# 'cost' role caches AWS pricing. 'ocplab versions list --refresh' ignores it.
+ocplab_versions_cache_file: "~/.ocplab/versions-cache.json"
+ocplab_versions_cache_max_age_hours: 12
+
+# One immutable directory per version. Never a symlink: ocplab resolves
+# binaries by absolute versioned path so that repointing the active version
+# can't swap a binary out from under a running deploy.
+ocplab_bin_cache: "~/.ocplab/bin"
+
+ocplab_versions_tarballs:
+  - openshift-install-linux.tar.gz
+  - openshift-client-linux.tar.gz
+
+# Bounded on purpose: 435 MB over a bad link should fail with a clear timeout
+# rather than hang a deploy indefinitely.
+ocplab_versions_download_timeout: 900

@@ -1,0 +1,50 @@
+---
+# rm: remove one version from the local cache.
+
+- name: A version is required
+  ansible.builtin.assert:
+    that: ocplab_versions_target | default('') | length > 0
+    fail_msg: "'ocplab versions rm' needs a version, e.g. 'ocplab versions rm 4.19.39'."
+
+# The declared version is what .venv/bin/oc points at. Removing it would leave
+# a dangling symlink and 'oc' would stop existing with no explanation, which is
+# a worse outcome than refusing.
+- name: Refuse to remove the version cluster.yaml declares
+  ansible.builtin.assert:
+    that: ocplab_versions_target != (ocplab_openshift_version | default(''))
+    fail_msg: >-
+      {{ ocplab_versions_target }} is the version declared in cluster.yaml
+      (openshift.version), so it's the one in use — removing it would break
+      'oc' and the next deploy. Point openshift.version at another version
+      first, or leave it unset to fall back to the PATH binaries.
+
+- name: Look for it in the cache
+  ansible.builtin.stat:
+    path: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}"
+  register: versions_rm_stat
+
+- name: Nothing to remove
+  ansible.builtin.debug:
+    msg: "OpenShift {{ ocplab_versions_target }} isn't in {{ versions_bin_cache }} — nothing to remove."
+  when: not versions_rm_stat.stat.exists
+
+- name: Remove it
+  when: versions_rm_stat.stat.exists
+  block:
+    - name: Measure what will be freed
+      ansible.builtin.find:
+        paths: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}"
+        recurse: true
+        file_type: file
+      register: versions_rm_files
+
+    - name: Delete the version's directory
+      ansible.builtin.file:
+        path: "{{ versions_bin_cache }}/{{ ocplab_versions_target }}"
+        state: absent
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: >-
+          Removed OpenShift {{ ocplab_versions_target }} —
+          {{ ((versions_rm_files.files | map(attribute='size') | sum) / 1024 / 1024) | round | int }} MB freed.
