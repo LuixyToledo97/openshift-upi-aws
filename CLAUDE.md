@@ -18,12 +18,14 @@ ROSA nor IPI.
 - 3 masters `m5.xlarge` + 2 workers `m5.large` + 1 temporary bootstrap
 - ~$1.06/hour on-demand while it's up in `eu-west-1` — see `ocplab cost`
   for a live, region-aware figure
-- **Plus ~$1.50 per deploy in NAT data processing**, measured on a real bill:
-  the six nodes each pull their own copy of the release payload from quay.io
-  through the NAT gateway, ~33 GB a time. It is the single biggest line item
-  in the project, larger than all EC2 compute, and `ocplab cost` cannot see
-  it — usage charges only appear afterwards. Don't quote the hourly figure as
-  the cost of a short cycle.
+- **Plus a per-deploy data charge, which is the biggest line in the project.**
+  The six nodes each pull their own copy of the release payload from quay.io
+  through the NAT gateway. Measured per deploy from the gateway's CloudWatch
+  `BytesInFromDestination`: **35.2 GB** across ten deploys (≈$1.58), or
+  **24.8 GB** (≈$1.12) with the capability set in `examples/minimal.yaml`.
+  Larger than all EC2 compute over the same period, and `ocplab cost` cannot
+  see it — it prices resources, and this is usage. Never quote the hourly
+  figure as the cost of a short cycle.
 
 ## Architecture
 
