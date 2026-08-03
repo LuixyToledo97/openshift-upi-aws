@@ -10,6 +10,19 @@ compute:
 controlPlane:
   name: master
   replicas: {{ ocplab_control_plane_replicas }}
+{% if ocplab_capabilities_baseline %}
+# Optional core components. Anything not enabled here is never deployed, so
+# its images are never pulled — which is the point: image pulls cross the NAT
+# gateway and are the single largest line on the bill (see README §8).
+capabilities:
+  baselineCapabilitySet: {{ ocplab_capabilities_baseline }}
+{% if ocplab_capabilities_additional %}
+  additionalEnabledCapabilities:
+{% for capability in ocplab_capabilities_additional %}
+  - {{ capability }}
+{% endfor %}
+{% endif %}
+{% endif %}
 networking:
   networkType: OVNKubernetes
   clusterNetwork:

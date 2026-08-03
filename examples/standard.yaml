@@ -59,6 +59,19 @@ openshift:
   # Leave it unset to keep using the binaries you installed yourself.
   # version: 4.22.6
 
+  # Optional. Disable optional core components so their images are never
+  # pulled — image pulls cross the NAT gateway and are the biggest line on the
+  # bill (README §8). On AWS the installer REQUIRES CloudCredential,
+  # CloudControllerManager and Ingress; 'ocplab validate' checks that for you.
+  # capabilities:
+  #   baselineCapabilitySet: None
+  #   additionalEnabledCapabilities:
+  #     - CloudCredential          # required on AWS
+  #     - CloudControllerManager   # required on AWS — see CLAUDE.md trap #1
+  #     - Ingress                  # required, always
+  #     - Console                  # drop this and 'ocplab console' has nothing to open
+  #     - Storage                  # the EBS CSI driver; without it, no dynamic PVCs
+
   # Optional. If omitted, 'ocplab render' auto-discovers the RHCOS AMI for
   # platform.aws.region via 'openshift-install coreos print-stream-json'
   # (local, no AWS calls). Set it explicitly only to pin a specific AMI.

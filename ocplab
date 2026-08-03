@@ -58,6 +58,20 @@ ZONE_ID_RE = re.compile(r"^Z[A-Z0-9]+$")
 # find the concrete version to write here.
 OCP_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
+# Accepted by 'openshift-install explain installconfig.capabilities'.
+CAPABILITY_BASELINES = (
+    "None", "vCurrent",
+    "v4.11", "v4.12", "v4.13", "v4.14", "v4.15", "v4.16", "v4.17", "v4.18",
+)
+# Refusing to disable these is the installer's rule, not ours — it reports:
+#   "disabling CloudCredential capability available only for baremetal platforms"
+#   "disabling CloudControllerManager is only supported on the Baremetal, None,
+#    or External platform"
+#   "the Ingress capability is required"
+# Checked here as well so it surfaces at `ocplab validate` rather than several
+# commands later, when ignition finally runs the installer.
+CAPABILITIES_REQUIRED_ON_AWS = ("CloudCredential", "CloudControllerManager", "Ingress")
+
 # Where managed binaries live, one immutable directory per version.
 BIN_CACHE = Path("~/.ocplab/bin").expanduser()
 # The binaries ocplab manages when openshift.version is set. kubectl ships in
@@ -392,6 +406,26 @@ def validate_cluster_config(cfg, config_path, *, zone_id_optional=False):
             f"'openshift.version' ({version!r}) must be an exact x.y.z version such as "
             "'4.22.6', not a channel — run 'ocplab versions list' to see what's available"
         )
+
+    caps = dig(cfg, "openshift", "capabilities") or {}
+    baseline = caps.get("baselineCapabilitySet")
+    additional = caps.get("additionalEnabledCapabilities") or []
+    if baseline is not None and baseline not in CAPABILITY_BASELINES:
+        errors.append(
+            f"'openshift.capabilities.baselineCapabilitySet' ({baseline!r}) must be one of: "
+            + ", ".join(CAPABILITY_BASELINES)
+        )
+    if not isinstance(additional, list):
+        errors.append("'openshift.capabilities.additionalEnabledCapabilities' must be a list")
+    elif baseline == "None":
+        missing = [c for c in CAPABILITIES_REQUIRED_ON_AWS if c not in additional]
+        if missing:
+            errors.append(
+                "'openshift.capabilities.additionalEnabledCapabilities' is missing "
+                + ", ".join(missing)
+                + " — the installer refuses to disable these on AWS. Add them, or drop "
+                "baselineCapabilitySet to keep the default set."
+            )
 
     safety = dig(cfg, "safetyNet") or {}
     if safety.get("enabled"):
@@ -730,6 +764,10 @@ def render_ansible_vars(cfg):
         # through these vars rather than by bare name, so the managed cache and
         # the PATH fallback are the same code path everywhere.
         "ocplab_openshift_version": dig(cfg, "openshift", "version") or "",
+        # Empty baseline means "don't emit a capabilities block at all", which
+        # leaves the installer's own default (vCurrent) in charge.
+        "ocplab_capabilities_baseline": dig(cfg, "openshift", "capabilities", "baselineCapabilitySet") or "",
+        "ocplab_capabilities_additional": dig(cfg, "openshift", "capabilities", "additionalEnabledCapabilities") or [],
         "ocplab_openshift_install_bin": resolve_binaries(cfg)["openshift-install"],
         "ocplab_oc_bin": resolve_binaries(cfg)["oc"],
         "ocplab_api_cert_file": cert_paths["api_cert_file"],

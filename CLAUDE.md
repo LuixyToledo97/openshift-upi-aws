@@ -313,6 +313,37 @@ the project had before. Making it required would force every existing
   not "terraform applied". After any deploy on a version that isn't listed,
   update it — including the failures, which are the part people actually need.
 
+## Cluster capabilities
+
+`openshift.capabilities` in `cluster.yaml` maps straight onto the installer's
+own `capabilities` block. Anything not enabled is never deployed, so its images
+are never pulled — which is the point, given that image pulls across the NAT
+gateway are the biggest line on the bill.
+
+**Three are mandatory on AWS, and this is the installer's rule, not a
+preference.** Asked for `baselineCapabilitySet: None` with nothing else, 4.22.7
+answers:
+
+```
+disabling CloudCredential capability available only for baremetal platforms
+disabling CloudControllerManager is only supported on the Baremetal, None, or External platform
+the Ingress capability is required
+```
+
+So `CloudCredential`, `CloudControllerManager` and `Ingress` always stay.
+`validate` checks for them, purely so the failure lands at `ocplab validate`
+rather than several commands later when `ignition` finally runs the installer.
+
+`openshift-install explain installconfig.capabilities` lists the accepted
+baseline values, and the capability names come from `ClusterVersionCapability`
+in `openshift/api`. Omit the section entirely and the installer's default
+(`vCurrent`) applies, which is what every deploy did before this existed.
+
+**How much this actually saves is unmeasured.** Capabilities are applied by the
+CVO at runtime, so generating manifests locally does not answer it — the number
+only shows up as `EU-NatGateway-Bytes` on a later bill. Don't quote a figure
+until a deploy has been compared against the ~33 GB baseline.
+
 ## Spot instances
 
 `compute.spot` and `bootstrap.spot` in `cluster.yaml` put those nodes on Spot.

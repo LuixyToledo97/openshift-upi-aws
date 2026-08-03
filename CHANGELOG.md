@@ -62,6 +62,18 @@ uses [Semantic Versioning](https://semver.org/).
 
   `Node` objects are pruned only when no running EC2 instance carries that
   private DNS name — checked live, so a merely unhealthy node keeps its object.
+- `openshift.capabilities` in `cluster.yaml`, passed through to the installer's
+  own `capabilities` block. Optional components that aren't enabled are never
+  deployed, so their images are never pulled — and image pulls across the NAT
+  gateway are the largest single charge this project incurs.
+
+  `CloudCredential`, `CloudControllerManager` and `Ingress` cannot be disabled
+  on AWS; that is the installer's rule, discovered by asking it rather than by
+  reading around it. `validate` enforces it so the failure arrives at
+  `ocplab validate` instead of several commands later.
+
+  How much it saves is deliberately not quoted: capabilities take effect in the
+  CVO at runtime, so it can only be measured against a real bill.
 - `ocplab init --minimal` writes the cheaper profile instead of the standard
   one. The flag makes it discoverable: an example only helps people who already
   know it exists.
