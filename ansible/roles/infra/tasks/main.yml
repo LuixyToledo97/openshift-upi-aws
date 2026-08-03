@@ -1,24 +1,135 @@
 ---
-# infra: thin layer over community.general.terraform. terraform.tfvars was
-# already written by `ocplab render` — Terraform loads it purely by
-# naming convention, no need to pass it via variables_files.
+# infra: runs terraform, streaming what it's doing instead of going silent.
 #
-# No business logic here: the module already has real check_mode support
-# (with --check it runs "terraform plan" / "terraform plan -destroy",
-# without touching anything) and confirmation is the CLI layer's (ocplab)
+# terraform.tfvars was already written by `ocplab render` — Terraform loads it
+# purely by naming convention, no need to pass it via variables_files.
+#
+# No business logic here: confirmation is the CLI layer's (ocplab)
 # responsibility, not this role's.
+#
+# Why not community.general.terraform any more: an Ansible module returns
+# everything at once, when it finishes. A 4-minute apply — or a 15-minute
+# destroy — showed one frozen line and then a wall of text, with no way to
+# tell progress from a hang, which is the only question you actually have
+# while waiting. Running terraform directly with -json and piping it through
+# tf_render.py gives a file that can be followed live with `tail -f`, a
+# per-resource record, and structured diagnostics when it fails.
+#
+# The cost of dropping the module is its built-in check_mode, which ran
+# "terraform plan" under --check. That is reimplemented below rather than
+# lost — see infra_subcommand.
 
-- name: "Terraform {{ 'apply' if infra_state == 'present' else 'destroy' }} in {{ ocplab_terraform_dir }}"
-  community.general.terraform:
-    project_path: "{{ ocplab_terraform_dir }}"
-    state: "{{ infra_state }}"
-    targets: "{{ infra_targets }}"
-    force_init: true
-  register: infra_result
+- name: Work out where to stream this terraform run
+  ansible.builtin.set_fact:
+    # Sits next to the run's own ocplab log and shares its timestamp prefix,
+    # so it's obvious which deploy a terraform log belongs to. Falls back to
+    # /tmp when a playbook is run by hand, outside the ocplab CLI.
+    infra_log_base: >-
+      {{ (lookup('ansible.builtin.env', 'OCPLAB_LOG_FILE') | regex_replace('\.log$', ''))
+         or '/tmp/ocplab-terraform' }}
+    # infra_intent is what the caller asked for; infra_verb is what terraform
+    # is actually told to run. They differ only under --check, where the
+    # intent is still "apply" but the subcommand is a plan — and the message
+    # the user reads has to say "would apply", not "would plan".
+    infra_intent: "{{ 'apply' if infra_state == 'present' else 'destroy' }}"
+    infra_verb: "{{ 'plan' if ansible_check_mode else ('apply' if infra_state == 'present' else 'destroy') }}"
 
-- name: Show the result
+- name: Build the terraform command line
+  ansible.builtin.set_fact:
+    # Named after the intent, not the subcommand: a single `deploy` invokes
+    # this role twice (the cluster's apply, then cluster_boot's targeted
+    # destroy of the bootstrap), and under --check both become "plan" — so
+    # keying the filename on the verb made two unrelated terraform runs append
+    # into one file, with two "Plan:" summaries and no way to tell them apart.
+    infra_log_file: "{{ infra_log_base }}_terraform-{{ infra_intent }}.log"
+    infra_raw_file: "{{ infra_log_base }}_terraform-{{ infra_intent }}.jsonl"
+    # check_mode maps to a plan — a read-only preview, which is exactly what
+    # --check means here. -destroy makes it preview a teardown instead.
+    infra_subcommand: >-
+      {{ 'plan -destroy' if (ansible_check_mode and infra_state == 'absent')
+         else ('plan' if ansible_check_mode
+               else (('apply' if infra_state == 'present' else 'destroy') + ' -auto-approve')) }}
+
+- name: "Tip: how to watch terraform resource by resource while this runs"
   ansible.builtin.debug:
     msg: >-
-      {{ 'no changes' if not infra_result.changed
-         else ('would apply' if ansible_check_mode else 'applied') }}
-      — command: {{ infra_result.command }}
+      terraform {{ infra_verb }} starting. To follow it live, open another
+      terminal and run: tail -f {{ infra_log_file }}
+
+- name: Initialize terraform
+  ansible.builtin.command:
+    cmd: terraform init -no-color -input=false
+    chdir: "{{ ocplab_terraform_dir }}"
+  changed_when: false
+  check_mode: false
+
+# check_mode: false so this still runs under --check — safe, because in that
+# case infra_subcommand is a plan, which changes nothing.
+# failed_when: false so that a terraform failure still reaches the tasks
+# below, which turn its diagnostics into a readable error instead of leaving
+# the caller with a raw module dump.
+- name: "Terraform {{ infra_verb }} in {{ ocplab_terraform_dir }}"
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      terraform {{ infra_subcommand }} -no-color -input=false -json
+      {% for target in infra_targets %}-target={{ target }} {% endfor %}
+      | python3 {{ (role_path ~ '/files/tf_render.py') | quote }}
+      --log {{ infra_log_file | quote }} --raw {{ infra_raw_file | quote }}
+      {{ '--plan-only' if ansible_check_mode else '' }}
+    chdir: "{{ ocplab_terraform_dir }}"
+    executable: /bin/bash
+  register: infra_run
+  check_mode: false
+  failed_when: false
+  # pipefail makes rc terraform's exit status, not the renderer's. The two
+  # conditions are ANDed, and Jinja short-circuits, so from_json is never
+  # handed an empty string when the renderer produced nothing.
+  changed_when:
+    - infra_run.stdout | default('') | length > 0
+    - ((infra_run.stdout | from_json).changed_resources | default(0)) | int > 0
+
+- name: Read the summary the renderer produced
+  ansible.builtin.set_fact:
+    infra_summary: "{{ (infra_run.stdout | default('') | trim) | from_json
+                       if (infra_run.stdout | default('') | trim | length > 0)
+                       else {} }}"
+
+- name: Show what terraform did
+  vars:
+    counts: "{{ infra_summary.result | default(infra_summary.plan, true) | default({}, true) }}"
+    # Spelled out rather than derived: naive suffixing turns "apply" into
+    # "applyd". Three verbs is not worth being clever about.
+    past_tense:
+      apply: applied
+      destroy: destroyed
+      plan: planned
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('would ' + infra_intent) if ansible_check_mode else past_tense[infra_verb] }}:
+      {{ counts.add | default(0) }} added ·
+      {{ counts.change | default(0) }} changed ·
+      {{ counts.remove | default(0) }} destroyed
+      — resource-by-resource detail in {{ infra_log_file }}
+  # Only on success: after a failure these counts are zeros and the word
+  # "applied" is actively misleading. The diagnostics below say what happened.
+  when: infra_run.rc == 0
+
+- name: Report terraform's own diagnostics
+  ansible.builtin.debug:
+    msg: >-
+      {{ ['terraform reported ' + (infra_summary.diagnostics | length | string) + ' error(s):']
+         + (infra_summary.diagnostics
+            | map(attribute='summary')
+            | map('regex_replace', '^', '  - ')
+            | list) }}
+  when: infra_summary.diagnostics | default([]) | length > 0
+
+- name: Terraform succeeded
+  ansible.builtin.assert:
+    that: infra_run.rc == 0
+    fail_msg: >-
+      terraform {{ infra_verb }} failed (exit {{ infra_run.rc }}).
+      {{ (infra_summary.diagnostics | default([]) | map(attribute='summary') | join('; '))
+         or 'No diagnostic reported — see the log.' }}
+      Full output: {{ infra_log_file }}
