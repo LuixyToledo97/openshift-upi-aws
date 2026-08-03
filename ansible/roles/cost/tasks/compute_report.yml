@@ -16,6 +16,7 @@
       volumes: "{{ cost_volumes | json_query('[].{size: size, type: type}') }}"
       nat_count: "{{ cost_nat_gateways.result | default([]) | length }}"
       lb_count: "{{ cost_lbs | length }}"
+      classic_lb_count: "{{ cost_classic_lbs | default([]) | length }}"
       eip_count: "{{ cost_eips.addresses | default([]) | length }}"
       prices: "{{ cost_final_prices }}"
   ansible.builtin.copy:
@@ -47,7 +48,8 @@
       - "Compute (EC2, {{ cost_report.running_instances }} running / {{ cost_report.stopped_instances }} stopped): ${{ cost_report.ec2_hourly }}/h"
       - "Storage (EBS, {{ cost_report.volume_count }} volume(s), {{ cost_report.volume_total_gb }} GB total): ${{ cost_report.ebs_hourly }}/h"
       - "NAT Gateway ({{ cost_report.nat_count }}): ${{ cost_report.nat_hourly }}/h"
-      - "Load Balancers ({{ cost_report.lb_count }}): ${{ cost_report.lb_hourly }}/h"
+      - "Network Load Balancers ({{ cost_report.lb_count }}, API): ${{ cost_report.lb_hourly }}/h"
+      - "Classic Load Balancer ({{ cost_report.classic_lb_count }}, ingress router): ${{ cost_report.classic_lb_hourly }}/h"
       - "Public IPv4 addresses ({{ cost_report.eip_count }}): ${{ cost_report.eip_hourly }}/h"
       - "-----------------------------------------------------------"
       - "TOTAL: ${{ cost_report.total_hourly }}/h (~${{ (cost_report.total_hourly | float * 24) | round(2) }}/day if left running)"

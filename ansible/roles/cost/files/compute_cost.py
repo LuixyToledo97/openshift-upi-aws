@@ -27,7 +27,13 @@ ec2_hourly = sum(price_for("ec2:" + i["instance_type"]) for i in running)
 # not just ones attached to a running instance.
 ebs_hourly = sum(v["size"] * price_for("ebs:" + v["type"]) / 730.0 for v in data["volumes"])
 nat_hourly = data["nat_count"] * price_for("nat_gateway_hour")
-lb_hourly = data["lb_count"] * price_for("nlb_hour")
+nlb_hourly = data["lb_count"] * price_for("nlb_hour")
+# Kept separate from the NLBs rather than lumped into one "load balancers"
+# figure: they're a different resource at a different rate, created by a
+# different thing (the ingress-operator, not Terraform), and merging them is
+# how the Classic one went unnoticed in the first place.
+clb_hourly = data["classic_lb_count"] * price_for("clb_hour")
+lb_hourly = nlb_hourly + clb_hourly
 eip_hourly = data["eip_count"] * price_for("public_ipv4_hour")
 total_hourly = ec2_hourly + ebs_hourly + nat_hourly + lb_hourly + eip_hourly
 
@@ -38,11 +44,13 @@ print(json.dumps({
     "volume_total_gb": sum(v["size"] for v in data["volumes"]),
     "nat_count": data["nat_count"],
     "lb_count": data["lb_count"],
+    "classic_lb_count": data["classic_lb_count"],
     "eip_count": data["eip_count"],
     "ec2_hourly": round(ec2_hourly, 4),
     "ebs_hourly": round(ebs_hourly, 4),
     "nat_hourly": round(nat_hourly, 4),
-    "lb_hourly": round(lb_hourly, 4),
+    "lb_hourly": round(nlb_hourly, 4),
+    "classic_lb_hourly": round(clb_hourly, 4),
     "eip_hourly": round(eip_hourly, 4),
     "total_hourly": round(total_hourly, 4),
     "missing_prices": sorted(missing),

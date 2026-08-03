@@ -78,7 +78,7 @@
     cost_needed_keys: >-
       {{ (cost_needed_instance_types | map('regex_replace', '^(.*)$', 'ec2:\1') | list)
          + (cost_needed_volume_types | map('regex_replace', '^(.*)$', 'ebs:\1') | list)
-         + ['nat_gateway_hour', 'nlb_hour', 'public_ipv4_hour'] }}
+         + ['nat_gateway_hour', 'nlb_hour', 'clb_hour', 'public_ipv4_hour'] }}
   ansible.builtin.set_fact:
     cost_cache_fresh: >-
       {{ (cost_cache_age_hours | float < cost_pricing_cache_max_age_hours | float)
@@ -145,6 +145,25 @@
   failed_when: false
   when: not cost_cache_fresh
 
+# Classic and Network load balancers share one usagetype and are told apart
+# only by the price dimension's description, so the substring has to be
+# 'per LoadBalancer-hour' — with the 'per', which "per Network
+# LoadBalancer-hour" does not contain. Matching bare 'LoadBalancer-hour' here
+# would silently pick up the Network price instead. Verified live against the
+# Pricing API: Classic 0.028, Network 0.0252 in eu-west-1.
+- name: Fetch Classic Load Balancer on-demand hourly pricing
+  ansible.builtin.shell: >-
+    timeout 20 aws pricing get-products --profile {{ ocplab_aws_profile }} --region us-east-1
+    --service-code AWSELB
+    --filters "Type=TERM_MATCH,Field=location,Value={{ cost_location_name }}"
+    "Type=TERM_MATCH,Field=productFamily,Value=Load Balancer"
+    --no-paginate --max-results 20 --output json
+    | python3 {{ role_path }}/files/extract_price.py --unit Hrs --description-contains "per LoadBalancer-hour"
+  register: cost_clb_price_result
+  changed_when: false
+  failed_when: false
+  when: not cost_cache_fresh
+
 - name: Fetch public IPv4 address on-demand hourly pricing
   ansible.builtin.shell: >-
     timeout 20 aws pricing get-products --profile {{ ocplab_aws_profile }} --region us-east-1
@@ -168,6 +187,7 @@
         | combine({
             'nat_gateway_hour': cost_nat_price_result.stdout | default('') | trim,
             'nlb_hour': cost_nlb_price_result.stdout | default('') | trim,
+            'clb_hour': cost_clb_price_result.stdout | default('') | trim,
             'public_ipv4_hour': cost_public_ipv4_price_result.stdout | default('') | trim,
           })
       }}
