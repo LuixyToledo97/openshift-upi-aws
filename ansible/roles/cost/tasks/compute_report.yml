@@ -12,7 +12,11 @@
 - name: Write the computation input
   vars:
     cost_input_data:
-      instances: "{{ cost_instances | json_query('[].{instance_type: instance_type, state: state.name}') }}"
+      # lifecycle is absent on on-demand instances and "spot" on Spot ones —
+      # that is the AWS API's own shape (InstanceLifecycle), snake_cased by the
+      # module, so json_query yields null rather than a missing key.
+      instances: "{{ cost_instances | json_query('[].{instance_type: instance_type, state: state.name, lifecycle: instance_lifecycle}') }}"
+      spot_prices: "{{ cost_spot_prices | default({}) }}"
       volumes: "{{ cost_volumes | json_query('[].{size: size, type: type}') }}"
       nat_count: "{{ cost_nat_gateways.result | default([]) | length }}"
       lb_count: "{{ cost_lbs | length }}"
@@ -42,10 +46,20 @@
   changed_when: false
 
 - name: "Cost report"
+  vars:
+    # Only split the compute line when something is actually on Spot — an
+    # "on-demand: 6" breakdown on an all-on-demand cluster restates the line
+    # it hangs off. Kept as a suffix rather than extra list entries so the
+    # report below stays a plain, readable list of lines.
+    cost_compute_split: >-
+      {{ ' (%s on-demand $%s/h + %s Spot $%s/h)' | format(
+           cost_report.ondemand_instances, cost_report.ec2_ondemand_hourly,
+           cost_report.spot_instances, cost_report.ec2_spot_hourly)
+         if cost_report.spot_instances > 0 else '' }}
   ansible.builtin.debug:
     msg:
       - "=== Approximate hourly cost — {{ ocplab_cluster_name }} ({{ ocplab_aws_region }}) ==="
-      - "Compute (EC2, {{ cost_report.running_instances }} running / {{ cost_report.stopped_instances }} stopped): ${{ cost_report.ec2_hourly }}/h"
+      - "Compute (EC2, {{ cost_report.running_instances }} running / {{ cost_report.stopped_instances }} stopped): ${{ cost_report.ec2_hourly }}/h{{ cost_compute_split }}"
       - "Storage (EBS, {{ cost_report.volume_count }} volume(s), {{ cost_report.volume_total_gb }} GB total): ${{ cost_report.ebs_hourly }}/h"
       - "NAT Gateway ({{ cost_report.nat_count }}): ${{ cost_report.nat_hourly }}/h"
       - "Network Load Balancers ({{ cost_report.lb_count }}, API): ${{ cost_report.lb_hourly }}/h"
@@ -53,9 +67,10 @@
       - "Public IPv4 addresses ({{ cost_report.eip_count }}): ${{ cost_report.eip_hourly }}/h"
       - "-----------------------------------------------------------"
       - "TOTAL: ${{ cost_report.total_hourly }}/h (~${{ (cost_report.total_hourly | float * 24) | round(2) }}/day if left running)"
-      - "Approximate on-demand pricing — excludes data transfer, load balancer"
-      - "LCU usage-based charges, and public IPs owned directly by load"
-      - "balancers (only allocated Elastic IPs are counted)."
+      - "Approximate pricing — excludes data transfer, load balancer LCU"
+      - "usage-based charges, and public IPs owned directly by load balancers"
+      - "(only allocated Elastic IPs are counted)."
+      - "{{ 'Spot instances are priced at the current ' ~ ocplab_aws_availability_zone ~ ' Spot price, which moves hourly; the rest is on-demand.' if cost_report.spot_instances > 0 else 'All instances are priced on-demand.' }}"
 
 - name: "Warning: some prices couldn't be determined"
   ansible.builtin.debug:
@@ -63,3 +78,11 @@
       Missing on-demand price for: {{ cost_report.missing_prices | join(', ') }}
       — those items are NOT included in the total above (counted as $0/h).
   when: cost_report.missing_prices | length > 0
+
+- name: "Warning: some Spot prices couldn't be fetched"
+  ansible.builtin.debug:
+    msg: >-
+      Could not fetch the current Spot price for:
+      {{ cost_report.spot_unpriced | join(', ') }} — those instances are counted
+      at the on-demand rate, so the total above is an over-estimate.
+  when: cost_report.spot_unpriced | length > 0

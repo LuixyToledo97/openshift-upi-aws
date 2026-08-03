@@ -246,6 +246,15 @@ Extra: the `ControlPlaneMachineSet` always stays `Degraded` in UPI (no
   instead of reporting "would create". Gate this kind of task on the
   parent resource's own `check_mode` probe result (`not
   <parent>.changed`) instead of letting it run unconditionally.
+- **`aws ... --query ... --output text` prints the literal string `None`** when
+  the query matches nothing — not an empty line. Anything that later does
+  `float()` or a numeric comparison on that value needs to reject `"None"`
+  explicitly, not just `""` (see the Spot price table in
+  `cost/tasks/refresh_pricing.yml`).
+- **`InstanceLifecycle` is absent on on-demand instances**, and only present
+  (as `"spot"`) on Spot ones — so `ec2_instance_info` results need
+  `selectattr('instance_lifecycle', 'defined')` before any comparison, and a
+  `json_query` projection of it yields `null` rather than omitting the key.
 - **The AWS Pricing API (Price List Query API) only has an endpoint in
   `us-east-1`/`ap-south-1`**, regardless of which region is being priced
   — the target region is a `location` FILTER value (a human-readable
@@ -389,6 +398,15 @@ not by preference:
 Real prices, measured in `eu-west-1a` on 2026-08-03: Spot ran ~50-55% below
 on-demand, **not** the 70-90% often quoted. With masters staying on-demand, a
 minimal profile lands near $0.83/h against $1.06/h.
+
+**`cost` prices Spot from `describe-spot-price-history`, and deliberately does
+not cache it.** Everything else in that role is cached for a week under
+`~/.ocplab/pricing-cache.json`, which is right for on-demand rates that change
+a few times a year and wrong for Spot rates that move hourly and per-AZ — a
+cached Spot price would be as misleading as the on-demand one it replaced, just
+less obviously. When the lookup fails the instance falls back to on-demand and
+the report names the type, so the total over-states rather than quietly
+promising a discount nobody checked.
 
 **There are two `cluster.yaml` templates and they must be kept in step**:
 `examples/standard.yaml` and `examples/minimal.yaml`, which `ocplab init` and

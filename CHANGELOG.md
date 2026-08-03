@@ -8,6 +8,26 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `cost` priced Spot instances at their on-demand rate. Measured on 2026-08-03
+  against a live minimal-profile cluster, it reported **$0.9213/h** against a
+  real **$0.8269/h** — inflated by **11.4%**, and inflated specifically in the
+  direction that makes running on Spot look less worthwhile than it is.
+
+  It now reads each instance's lifecycle — which `ec2_instance_info` already
+  returns — and looks up the current Spot price for the types actually running
+  as Spot. Those prices are deliberately **not** cached, unlike the on-demand
+  ones: on-demand pricing changes a few times a year, Spot pricing moves by the
+  hour and by availability zone, so a cached Spot price would be exactly as
+  wrong as the on-demand figure it replaces, just less obviously. When a Spot
+  price can't be fetched the instance falls back to on-demand and the report
+  says which types that happened to, so the number is over-stated rather than
+  quietly optimistic.
+
+  The compute line splits into on-demand and Spot only when something is
+  actually on Spot, and the report's closing note now says which basis was
+  used — a Spot figure is a snapshot of a price that moves, and presenting it
+  as if it were a rate would be its own kind of wrong.
+
 - The orphaned `k8s-elb-*` security group could not be deleted, which stalled
   `destroy` on the VPC for twenty minutes and then failed it — with nothing in
   the output connecting the two, because the original single attempt swallowed

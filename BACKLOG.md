@@ -118,28 +118,3 @@ cluster in silence. An `oc delete` in that state goes somewhere unintended.
 
 The venv already has to be activated for ocplab to work at all, which is what
 makes the third option tempting and also what makes it presumptuous.
-
----
-
-## 💱 `ocplab cost` prices Spot instances at on-demand rates
-
-**What**: the cost report looks up `ec2:<instance_type>` on-demand pricing for
-every instance, including ones running as Spot. Measured on 2026-08-03 against
-a live minimal-profile cluster: reported **$0.9213/h**, real **$0.8269/h** —
-inflated by **11.4%**.
-
-**Why it matters**: same reasoning as the Classic ELB fix that shipped the same
-day. A cost tool that is quietly wrong is worse than no number, and this one is
-wrong in the direction that makes the Spot feature look less effective than it
-is.
-
-**What it would take**: `describe-spot-price-history` for the instance types
-that are actually running as Spot, keyed off `InstanceLifecycle == "spot"`
-which `ec2_instance_info` already returns. Spot prices move, so the existing
-pricing cache is the wrong shape for them — a cached Spot price would be as
-misleading as an on-demand one.
-
-**Open question**: Spot prices change by the hour, so any figure is a snapshot.
-Is the honest presentation a current-price estimate, or a separate line saying
-"2 instances on Spot, priced at the current rate" so nobody mistakes it for a
-guarantee?

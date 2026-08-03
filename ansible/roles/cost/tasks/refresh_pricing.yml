@@ -58,6 +58,50 @@
   ansible.builtin.set_fact:
     cost_needed_instance_types: "{{ cost_instances | map(attribute='instance_type') | unique | list }}"
     cost_needed_volume_types: "{{ cost_volumes | map(attribute='type') | unique | list }}"
+    cost_spot_types: >-
+      {{ cost_instances | selectattr('instance_lifecycle', 'defined')
+         | selectattr('instance_lifecycle', 'equalto', 'spot')
+         | map(attribute='instance_type') | unique | list }}
+
+# Deliberately NOT cached, unlike everything else here. On-demand prices change
+# a few times a year; Spot prices move by the hour and by availability zone, so
+# a cached one would be exactly as wrong as the on-demand figure this replaces —
+# it would just be wrong in a less obvious way.
+#
+# describe-spot-price-history returns newest-first; the first datapoint for the
+# AZ the lab runs in is the current price.
+- name: "Fetch current Spot prices for: {{ cost_spot_types | join(', ') }}"
+  ansible.builtin.command:
+    cmd: >-
+      timeout 20 aws ec2 describe-spot-price-history
+      --profile {{ ocplab_aws_profile }}
+      --region {{ ocplab_aws_region }}
+      --instance-types {{ item }}
+      --product-descriptions 'Linux/UNIX' 'Linux/UNIX (Amazon VPC)'
+      --availability-zone {{ ocplab_aws_availability_zone }}
+      --no-paginate --max-results 1
+      --query SpotPriceHistory[0].SpotPrice --output text
+  loop: "{{ cost_spot_types }}"
+  register: cost_spot_price_results
+  changed_when: false
+  # A missing Spot price is not a reason to fail the whole report: the
+  # instance falls back to its on-demand rate and the report says so.
+  failed_when: false
+  when: cost_spot_types | length > 0
+
+# `--output text` prints the literal string "None" — not an empty line — when
+# the query matches nothing, so an unfiltered dict would carry "None" through
+# to float() and blow up in compute_cost.py.
+- name: Build the Spot price table
+  ansible.builtin.set_fact:
+    cost_spot_prices: >-
+      {{ dict(cost_spot_types | zip(
+           cost_spot_price_results.results | default([])
+           | map(attribute='stdout') | map('trim') | list))
+         | dict2items
+         | rejectattr('value', 'in', ['', 'None'])
+         | items2dict }}
+  when: cost_spot_types | length > 0
 
 - name: Check whether the pricing cache file exists
   ansible.builtin.stat:

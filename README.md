@@ -1228,24 +1228,44 @@ currently **running or stopped** (`ocplab power off` correctly zeroes
 out the compute line while EBS/NAT/LB keep billing), and fetches
 real on-demand prices for `platform.aws.region` from the AWS Pricing
 API — cached locally under `~/.ocplab/pricing-cache.json` for a week
-(on-demand prices rarely change) so every later run is instant. Example
-output, on this lab powered off:
+(on-demand prices rarely change) so every later run is instant.
+
+**Instances running as Spot are priced as Spot**, from
+`describe-spot-price-history` for your availability zone. Those prices are
+*not* cached: on-demand pricing changes a few times a year, Spot pricing moves
+by the hour, and a week-old Spot price would be no better than the on-demand
+one. When a Spot price can't be fetched, that instance falls back to its
+on-demand rate and the output names the type — the total is then an
+over-estimate, which is the safe direction to be wrong in.
+
+Example output, on a running minimal-profile cluster with Spot workers:
 
 ```
 === Approximate hourly cost — ocp4lab (eu-west-1) ===
-Compute (EC2, 0 running / 5 stopped): $0/h
-Storage (EBS, 5 volume(s), 600 GB total): $0.0723/h
+Compute (EC2, 5 running / 0 stopped): $0.617/h (3 on-demand $0.5568/h + 2 Spot $0.0602/h)
+Storage (EBS, 5 volume(s), 500 GB total): $0.0634/h
 NAT Gateway (1): $0.048/h
-Load Balancers (2): $0.0504/h
+Network Load Balancers (2, API): $0.0576/h
+Classic Load Balancer (1, ingress router): $0.03/h
 Public IPv4 addresses (1): $0.005/h
 -----------------------------------------------------------
-TOTAL: $0.1757/h (~$4.22/day if left running)
+TOTAL: $0.821/h (~$19.7/day if left running)
+Approximate pricing — excludes data transfer, load balancer LCU
+usage-based charges, and public IPs owned directly by load balancers
+(only allocated Elastic IPs are counted).
+Spot instances are priced at the current eu-west-1a Spot price, which moves hourly; the rest is on-demand.
 ```
 
 Still an approximation by nature (no tool can be exact without your real
 usage): it excludes data transfer, load balancer LCU usage-based charges,
 and public IPs owned directly by a load balancer (only allocated Elastic
 IPs are counted) — always flagged in the output, never silently assumed.
+
+The exclusion that matters most is the first one. Per-deploy data transfer is
+the largest single charge in this project — see [The hourly rate is not the
+cost of a cycle](#-the-hourly-rate-is-not-the-cost-of-a-cycle) — and `cost`
+cannot see it: it prices resources, and that is usage. Never read the hourly
+figure as the cost of a short deploy-test-destroy cycle.
 
 ### ⏱️ Hourly breakdown (static, eu-west-1 only)
 

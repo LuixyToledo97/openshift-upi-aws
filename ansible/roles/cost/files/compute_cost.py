@@ -22,7 +22,34 @@ def price_for(key):
 running = [i for i in data["instances"] if i["state"] == "running"]
 stopped = [i for i in data["instances"] if i["state"] != "running"]
 
-ec2_hourly = sum(price_for("ec2:" + i["instance_type"]) for i in running)
+# AWS sets InstanceLifecycle to "spot" only on Spot instances; on-demand ones
+# have no such field, so json_query hands us null rather than omitting the key.
+spot_prices = data.get("spot_prices") or {}
+
+
+def is_spot(instance):
+    return (instance.get("lifecycle") or "") == "spot"
+
+
+def instance_price(instance):
+    """Spot instances cost the Spot price, not the on-demand one.
+
+    Pricing them at on-demand inflated a measured $0.8269/h cluster to
+    $0.9213/h — 11.4% — and did it in the direction that makes running on Spot
+    look less worthwhile than it is. Falls back to on-demand when the Spot
+    price couldn't be fetched, which overstates rather than understates: better
+    to quote too much than to quietly promise a discount that wasn't checked.
+    """
+    if is_spot(instance) and instance["instance_type"] in spot_prices:
+        return float(spot_prices[instance["instance_type"]])
+    return price_for("ec2:" + instance["instance_type"])
+
+
+on_demand_running = [i for i in running if not is_spot(i)]
+spot_running = [i for i in running if is_spot(i)]
+ec2_ondemand_hourly = sum(instance_price(i) for i in on_demand_running)
+ec2_spot_hourly = sum(instance_price(i) for i in spot_running)
+ec2_hourly = ec2_ondemand_hourly + ec2_spot_hourly
 # EBS bills whether the instance is on or off — every volume found counts,
 # not just ones attached to a running instance.
 ebs_hourly = sum(v["size"] * price_for("ebs:" + v["type"]) / 730.0 for v in data["volumes"])
@@ -40,6 +67,15 @@ total_hourly = ec2_hourly + ebs_hourly + nat_hourly + lb_hourly + eip_hourly
 print(json.dumps({
     "running_instances": len(running),
     "stopped_instances": len(stopped),
+    "ondemand_instances": len(on_demand_running),
+    "spot_instances": len(spot_running),
+    "ec2_ondemand_hourly": round(ec2_ondemand_hourly, 4),
+    "ec2_spot_hourly": round(ec2_spot_hourly, 4),
+    # Spot instances whose current price could not be fetched, and are
+    # therefore counted at the on-demand rate.
+    "spot_unpriced": sorted({
+        i["instance_type"] for i in spot_running if i["instance_type"] not in spot_prices
+    }),
     "volume_count": len(data["volumes"]),
     "volume_total_gb": sum(v["size"] for v in data["volumes"]),
     "nat_count": data["nat_count"],
