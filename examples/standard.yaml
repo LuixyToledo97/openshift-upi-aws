@@ -1,0 +1,90 @@
+apiVersion: ocplab/v1
+kind: ClusterConfig
+
+metadata:
+  name: ocp4lab
+  baseDomain: example.com
+
+platform:
+  aws:
+    region: eu-west-1
+    availabilityZone: eu-west-1a
+    profile: openshift-lab
+    # Leave as CHANGEME until you've run 'ocplab bootstrap apply' — that's
+    # what creates the public hosted zone, and it prints the ID to paste here.
+    publicHostedZoneId: CHANGEME
+
+networking:
+  vpcCidr: 10.0.0.0/16
+  publicSubnetCidr: 10.0.1.0/24
+  privateSubnetCidr: 10.0.2.0/24
+  clusterNetwork: 10.128.0.0/14
+  serviceNetwork: 172.30.0.0/16
+
+controlPlane:
+  replicas: 3
+  instanceType: m5.xlarge
+  volumeSize: 120
+  volumeType: gp3
+
+compute:
+  replicas: 2
+  instanceType: m5.large
+  volumeSize: 120
+  volumeType: gp3
+  # Optional. Run the workers on Spot instances — roughly half the on-demand
+  # price, at the cost of AWS being able to reclaim them with 2 minutes' notice.
+  # Losing a worker reschedules pods rather than breaking the cluster, and
+  # 'ocplab deploy' recreates it. NOT available for controlPlane: see below.
+  # spot: true
+
+bootstrap:
+  instanceType: m5.xlarge
+  volumeSize: 120
+  volumeType: gp3
+  # Optional. The safest node to run on Spot: it lives for about twenty
+  # minutes, and if AWS reclaims it you re-run the deploy.
+  # spot: true
+
+# NOTE on Spot and the control plane: 'controlPlane.spot' is deliberately
+# rejected. In UPI there is no ControlPlaneMachineSet and no Machine API to
+# replace a reclaimed master, so recovering one means editing etcd membership
+# by hand. Spot is offered for compute and bootstrap only.
+
+openshift:
+  # Optional. Pin the OpenShift version, and ocplab downloads and caches the
+  # matching 'openshift-install' and 'oc' under ~/.ocplab/bin/<version>/,
+  # instead of using whatever happens to be on your PATH. Run
+  # 'ocplab versions list' to see what's available and what you already have.
+  # Leave it unset to keep using the binaries you installed yourself.
+  # version: 4.22.6
+
+  # Optional. If omitted, 'ocplab render' auto-discovers the RHCOS AMI for
+  # platform.aws.region via 'openshift-install coreos print-stream-json'
+  # (local, no AWS calls). Set it explicitly only to pin a specific AMI.
+  # rhcosAmi: ami-0123456789abcdef0
+
+credentials:
+  pullSecretFile: ~/.ocplab/pull-secret.json
+  sshPublicKeyFile: ~/.ssh/id_ed25519.pub
+
+certificates:
+  # Optional — custom TLS certs for the API and *.apps ingress, replacing
+  # OpenShift's own self-signed ones. ocplab does NOT generate these —
+  # point these at your own REAL cert/key pairs, signed by a trusted CA.
+  # Leave unset to keep OpenShift's own defaults (recommended for a lab).
+  # Do not use self-signed certs here — see cluster.yaml for why.
+  # apiCertFile: ~/.ocplab/certs/ocp4lab-api.crt
+  # apiKeyFile: ~/.ocplab/certs/ocp4lab-api.key
+  # appsCertFile: ~/.ocplab/certs/ocp4lab-apps.crt
+  # appsKeyFile: ~/.ocplab/certs/ocp4lab-apps.key
+
+safetyNet:
+  enabled: true
+  budgetUsd: 50
+  alertEmails:
+    - your-email@example.com
+  killswitch:
+    enabled: true
+    schedule: "0 22 * * ? *"
+    timezone: Europe/Madrid

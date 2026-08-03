@@ -340,12 +340,18 @@ Real prices, measured in `eu-west-1a` on 2026-08-03: Spot ran ~50-55% below
 on-demand, **not** the 70-90% often quoted. With masters staying on-demand, a
 minimal profile lands near $0.83/h against $1.06/h.
 
-**There are two `cluster.yaml` templates and they must be kept in step**: the
-standard one is the `CLUSTER_YAML_EXAMPLE` constant in `ocplab`, the cheaper
-one is `examples/minimal.yaml`, which `ocplab init --minimal` writes verbatim
-(deliberately not a second embedded copy). `validate` catches a *missing
-required* field in either, but nothing catches a new *optional* field that only
-got added to one — so when the schema grows, update both by hand.
+**There are two `cluster.yaml` templates and they must be kept in step**:
+`examples/standard.yaml` and `examples/minimal.yaml`, which `ocplab init` and
+`ocplab init --minimal` write verbatim. `validate` catches a *missing required*
+field in either, but nothing catches a new *optional* field that only got added
+to one — so when the schema grows, update both by hand.
+
+Both are files rather than strings in `ocplab`: a config template is data, the
+whole repository is needed to run anything anyway, and in a public repo the
+config format is one of the first things people read. Note that `.gitignore`
+anchors `/cluster.yaml` to the root for this reason — an unanchored pattern
+matches at any depth and would silently exclude a shipped
+`examples/cluster.yaml`, which is why the files are named `standard`/`minimal`.
 
 ## `ocplab repair`
 

@@ -63,10 +63,20 @@ uses [Semantic Versioning](https://semver.org/).
   `Node` objects are pruned only when no running EC2 instance carries that
   private DNS name — checked live, so a merely unhealthy node keeps its object.
 - `ocplab init --minimal` writes the cheaper profile instead of the standard
-  one. It writes `examples/minimal.yaml` verbatim rather than carrying a second
-  embedded template — one source of truth, and the file stays readable on
-  GitHub without running anything. The flag also makes the profile
-  discoverable: an example only helps people who already know it exists.
+  one. The flag makes it discoverable: an example only helps people who already
+  know it exists.
+
+  Both templates now live in `examples/` — `standard.yaml` and `minimal.yaml` —
+  and `init` writes them verbatim. The standard one used to be a string
+  constant inside `ocplab`, which left the two halves of the same idea in
+  different places. A config template is data, the whole repository is needed
+  to run anything regardless, and in a public repo the config format is among
+  the first things people read.
+
+  `.gitignore` now anchors `/cluster.yaml` to the repository root. The
+  unanchored pattern matched at any depth, so a shipped `examples/cluster.yaml`
+  would have been excluded silently — present for the author, missing for
+  everyone who cloned.
 - Spot instances for compute and bootstrap nodes: `compute.spot` and
   `bootstrap.spot` in `cluster.yaml`, both defaulting to false. Measured in
   `eu-west-1a`, Spot ran 50-55% below on-demand — worth correcting against the

@@ -1,7 +1,11 @@
 # Your personal lab config (domain, AWS profile, email...) — generated
-# locally by 'ocplab init' from the template in the ocplab script /
-# README §4, never meant to be committed.
-cluster.yaml
+# locally by 'ocplab init' from a template in examples/, never meant to be
+# committed.
+#
+# Anchored to the repository root on purpose. An unanchored pattern matches at
+# any depth, so a shipped examples/cluster.yaml would have been excluded
+# silently — present on the author's disk, missing for everyone who cloned.
+/cluster.yaml
 
 templates/install-config.yaml
 install-dir/
