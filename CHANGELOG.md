@@ -8,27 +8,27 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- The orphaned `k8s-elb-*` security group could not be deleted, stalling
-  `destroy` on the VPC. It was first treated as a timing problem — one attempt
-  with `ignore_errors`, then retries — but retrying could never have worked:
+- The orphaned `k8s-elb-*` security group could not be deleted, which stalled
+  `destroy` on the VPC for twenty minutes and then failed it — with nothing in
+  the output connecting the two, because the original single attempt swallowed
+  its own error under `ignore_errors`.
+
+  It was first treated as a timing problem and given retries. That made the
+  failure visible, which was worth doing, but it could never have fixed it:
   measured on 2026-08-03, **zero** network interfaces were using the group and
-  eleven minutes of retries changed nothing. AWS reports
+  eleven minutes of retrying changed nothing. AWS reports
   `DependencyViolation: has a dependent object` for a security group that
   another group's *rules* reference, and the ingress-operator adds exactly such
   a rule to the node security groups so the router ELB can reach the nodes.
-  That reference only clears when Terraform deletes the node groups, which
-  happens after the cleanup runs. `teardown` now revokes the referencing rules
-  first — safe, since those groups are seconds from being destroyed — and the
-  short retry that remains is a safety net rather than the strategy.
+  That reference only clears when Terraform deletes the node groups — which
+  happens *after* the cleanup task, so no retry budget could have succeeded.
 
-  The original single attempt also hid the failure entirely. It runs moments after the router ELB is
-  removed, and AWS releases what was attached to it on its own schedule, so
-  `DependencyViolation` is the normal first answer. The consequence surfaced
-  somewhere unrecognisable: Terraform cannot delete a VPC that still contains a
-  security group it doesn't manage, so `destroy` sat on "still destroying VPC
-  main" for twenty minutes with nothing connecting the two. It is now retried
-  for up to `ocplab_sg_teardown_timeout`, and if it still fails, says so and
-  explains that the VPC is about to stall because of it.
+  `teardown` now revokes the referencing rules before deleting the group, which
+  is safe because those node groups are seconds from being destroyed anyway.
+  The remaining short retry is a safety net for a genuine ENI attachment, and
+  its warning says so, to send the next person looking at interfaces rather
+  than back at the rules.
+
 - Closing the terminal killed a running `deploy`. The stdout callback wrote to
   `sys.stdout` unguarded, so once the terminal window was gone the first task
   to complete raised and took the whole playbook down — silently, mid-install,
