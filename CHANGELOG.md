@@ -24,6 +24,28 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `ocplab repair`: recreates workers that Terraform manages but that no longer
+  exist, approves the new node's CSRs, and removes `Node` objects left behind
+  by instances that are gone. Written alongside Spot support, since a reclaimed
+  worker is the common cause, but it is not Spot-specific — a node terminated
+  by hand or lost to an AWS failure recovers the same way.
+
+  It is the only command that runs `terraform apply` against a **running**
+  cluster, so it plans first and inspects the result: a repair is add-only, and
+  anything that would be changed, replaced or destroyed is refused with the
+  plan shown. That guard is the point of the command rather than a precaution —
+  `render` auto-discovers the RHCOS AMI, so a changed `openshift.version` makes
+  Terraform want to replace all three masters, and an unguarded apply would
+  destroy the cluster it was asked to fix.
+
+  It also declines to create masters: a replacement master arrives with a new
+  private IP and needs its etcd membership repaired by hand, so an instance
+  that exists but isn't an etcd member is worse than an obviously missing one.
+  And it never runs the `ignition` role, which would mint a new `infraID` and
+  re-tag a live cluster.
+
+  `Node` objects are pruned only when no running EC2 instance carries that
+  private DNS name — checked live, so a merely unhealthy node keeps its object.
 - Spot instances for compute and bootstrap nodes: `compute.spot` and
   `bootstrap.spot` in `cluster.yaml`, both defaulting to false. Measured in
   `eu-west-1a`, Spot ran 50-55% below on-demand — worth correcting against the

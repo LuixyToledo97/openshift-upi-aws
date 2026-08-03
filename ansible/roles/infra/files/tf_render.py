@@ -115,6 +115,11 @@ class Renderer:
         self.result = None
         self.diagnostics = []
         self.changed = 0
+        # Every planned action, as {action, type, name, key}. Collected even
+        # when they aren't rendered, because `ocplab repair` inspects them to
+        # decide whether a plan is safe to apply against a live cluster —
+        # counts alone can't tell "create a worker" from "replace a master".
+        self.planned = []
 
     def emit(self, text=""):
         if self.log:
@@ -129,11 +134,18 @@ class Renderer:
         present, past = ACTIONS.get(action, (action, action))
 
         if etype == "planned_change":
-            if not self.plan_only:
-                return
             change = event.get("change") or {}
             resource = change.get("resource") or {}
             action = change.get("action", "")
+            self.planned.append({
+                "action": action,
+                "type": resource.get("resource_type", ""),
+                "name": resource.get("resource_name", ""),
+                "key": resource.get("resource_key"),
+                "addr": resource.get("addr", ""),
+            })
+            if not self.plan_only:
+                return
             marker, verb = PLANNED.get(action, ("•", action))
             self.emit(f"  {marker} would {verb:<8} {friendly(resource)}")
 
@@ -196,6 +208,7 @@ class Renderer:
             "plan": self.plan,
             "result": self.result,
             "diagnostics": self.diagnostics,
+            "planned": self.planned,
             "changed_resources": self.changed,
         }
 

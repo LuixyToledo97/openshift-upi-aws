@@ -1,0 +1,83 @@
+---
+# The safety gate. Everything this command is allowed to do is decided here,
+# before a single resource is touched.
+
+- name: Ask Terraform what it would do
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      terraform plan -no-color -input=false -json
+      | python3 {{ (repair_tf_render | quote) }}
+      --log {{ repair_plan_log | quote }} --raw {{ repair_plan_raw | quote }} --plan-only
+    chdir: "{{ ocplab_terraform_dir }}"
+    executable: /bin/bash
+  register: repair_plan_run
+  changed_when: false
+  failed_when: false
+
+- name: Read the plan
+  ansible.builtin.set_fact:
+    repair_plan: "{{ (repair_plan_run.stdout | default('') | trim) | from_json
+                     if (repair_plan_run.stdout | default('') | trim | length > 0)
+                     else {} }}"
+
+- name: Fail if Terraform couldn't even produce a plan
+  ansible.builtin.assert:
+    that: repair_plan_run.rc == 0
+    fail_msg: >-
+      terraform plan failed (exit {{ repair_plan_run.rc }}).
+      {{ (repair_plan.diagnostics | default([]) | map(attribute='summary') | join('; '))
+         or 'See ' + repair_plan_log }}
+
+- name: Separate what would be created from everything else
+  ansible.builtin.set_fact:
+    repair_planned: "{{ repair_plan.planned | default([]) | selectattr('action', 'equalto', 'create') | list }}"
+    repair_destructive: >-
+      {{ repair_plan.planned | default([]) | rejectattr('action', 'equalto', 'create') | list }}
+
+# The whole point of the command. A repair is add-only: anything that would be
+# changed, replaced or destroyed means Terraform and the running cluster
+# disagree about something other than a missing node, and applying that plan
+# could take the cluster down. Refuse and show the operator what it wanted to
+# do, rather than doing it.
+- name: Refuse if the plan would change or destroy anything
+  ansible.builtin.assert:
+    that: repair_destructive | length == 0
+    fail_msg: >-
+      Refusing to apply: this plan is not a repair. Terraform wants to
+      {{ repair_destructive | map(attribute='action') | unique | join('/') }}
+      {{ repair_destructive | map(attribute='addr') | join(', ') }}.
+      A repair only ever CREATES what is missing. Something else has drifted —
+      a changed openshift.version would move the RHCOS AMI and replace every
+      node, for instance. Inspect {{ repair_plan_log }} and resolve it
+      deliberately; 'ocplab deploy' rebuilds from scratch if that's what you want.
+
+# Masters are excluded even though creating one is not destructive: an
+# instance is not a working etcd member. A replacement master joins with a new
+# private IP, needs the etcd-N DNS records repointed and the dead member
+# removed from the etcd cluster by hand. Pretending 'repair' handles that would
+# be worse than not offering it.
+- name: Refuse if the plan touches anything other than workers
+  ansible.builtin.assert:
+    that: repair_planned | rejectattr('name', 'equalto', 'worker') | list | length == 0
+    fail_msg: >-
+      Refusing to apply: the plan would create
+      {{ repair_planned | rejectattr('name', 'equalto', 'worker') | map(attribute='addr') | join(', ') }},
+      and repair only recreates workers. A missing master needs its etcd
+      membership repaired by hand — recreating the instance alone leaves a
+      control plane that looks present and isn't. See CLAUDE.md.
+
+- name: Show what will be recreated
+  ansible.builtin.debug:
+    msg: >-
+      {{ ['Plan is a clean repair — ' + (repair_planned | length | string) + ' instance(s) to create:']
+         + (repair_planned | map(attribute='addr') | map('regex_replace', '^', '  - ') | list) }}
+  when: repair_planned | length > 0
+
+- name: Nothing is missing
+  ansible.builtin.debug:
+    msg: >-
+      Terraform reports no missing infrastructure — every instance it manages
+      exists. If a node is unhealthy rather than absent, this isn't the command
+      for it; check 'ocplab verify'.
+  when: repair_planned | length == 0

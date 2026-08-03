@@ -1,0 +1,109 @@
+---
+# repair: put back a worker that disappeared, on a cluster that is otherwise
+# healthy. The usual cause is AWS reclaiming a Spot instance, but nothing here
+# is Spot-specific — a manually terminated node, or one lost to an AWS hardware
+# failure, is recovered exactly the same way.
+#
+# What this role does NOT do, and why:
+#
+#   - It never runs the `ignition` role. Regenerating install-dir mints a new
+#     infraID, and that ID is in the default_tags of every Terraform resource
+#     (providers.tf). Re-tagging a live cluster with an ID it doesn't recognise
+#     is CLAUDE.md trap #1 arriving through the back door: the cloud controller
+#     stops recognising the cluster and nothing schedules.
+#
+#   - It never applies a plan it hasn't inspected. This is the only command
+#     that runs `terraform apply` against a running cluster, so a plan that
+#     replaces the control plane has to be refused, not executed. That is not
+#     hypothetical: `render` auto-discovers the RHCOS AMI, so a changed
+#     openshift.version would make Terraform want to replace all three masters.
+
+- name: Check whether install-dir's kubeconfig exists
+  ansible.builtin.stat:
+    path: "{{ ocplab_kubeconfig | expanduser }}"
+  register: repair_kubeconfig_stat
+
+- name: Fail fast if there's no cluster to repair
+  ansible.builtin.assert:
+    that: repair_kubeconfig_stat.stat.exists
+    fail_msg: >-
+      No kubeconfig at {{ ocplab_kubeconfig }} — there's no cluster here to
+      repair. 'ocplab repair' fixes a missing node on a running cluster; to
+      build one, use 'ocplab deploy'.
+
+# Same bounded TCP probe verify uses: the Kubernetes client has no connection
+# timeout worth relying on, and repair should refuse quickly rather than hang.
+- name: Check whether the API server is reachable (fast, bounded)
+  ansible.builtin.wait_for:
+    host: "api.{{ ocplab_cluster_name }}.{{ ocplab_base_domain }}"
+    port: 6443
+    timeout: "{{ repair_api_reachability_timeout }}"
+    state: started
+  register: repair_api_reachable
+  ignore_errors: true
+
+- name: Fail fast if the API isn't reachable
+  ansible.builtin.assert:
+    that: not repair_api_reachable.failed
+    fail_msg: >-
+      Cluster API (api.{{ ocplab_cluster_name }}.{{ ocplab_base_domain }}:6443) is
+      not reachable. repair fixes a missing worker on an otherwise healthy
+      cluster — it can't help a cluster that is down. Check 'ocplab verify' and
+      'ocplab power status' first.
+
+- name: Check how old install-dir is
+  ansible.builtin.stat:
+    path: "{{ ocplab_install_dir }}/metadata.json"
+  register: repair_metadata_stat
+
+# A warning rather than a refusal. The Ignition material in install-dir carries
+# certificates that expire after 24h, so a node created from it later may not be
+# able to fetch its config from the machine-config server. "May" is honest: this
+# has not been verified either way, and refusing outright would block a recovery
+# that might work perfectly well.
+- name: "Warn if the Ignition material is older than {{ ocplab_ignition_max_age_hours }}h"
+  ansible.builtin.debug:
+    msg: >-
+      install-dir is
+      {{ ((now(utc=true).strftime('%s') | int - repair_metadata_stat.stat.mtime | int) / 3600) | round(1) }}h
+      old and its Ignition certificates expire after {{ ocplab_ignition_max_age_hours }}h.
+      A node created now may fail to fetch its config from the machine-config
+      server and never become Ready. If that happens, the cluster needs
+      redeploying rather than repairing — regenerating install-dir on a live
+      cluster changes the infraID and breaks it.
+  when: >-
+    repair_metadata_stat.stat.exists
+    and ((now(utc=true).strftime('%s') | int - repair_metadata_stat.stat.mtime | int)
+         > (ocplab_ignition_max_age_hours | int * 3600))
+
+- name: Work out what Terraform would do
+  ansible.builtin.import_tasks: plan.yml
+
+- name: Apply the plan, now that it's known to be safe
+  ansible.builtin.include_role:
+    name: infra
+  vars:
+    infra_state: present
+  when: repair_planned | length > 0
+
+- name: Approve the new node's CSRs ({{ ocplab_csr_approval_rounds }} rounds)
+  ansible.builtin.include_tasks: ../../finalize/tasks/approve_csr_round.yml
+  loop: "{{ range(1, ocplab_csr_approval_rounds + 1) | list }}"
+  loop_control:
+    loop_var: finalize_csr_round
+  when: repair_planned | length > 0
+
+- name: Remove the Node objects left behind by instances that no longer exist
+  ansible.builtin.import_tasks: prune_nodes.yml
+
+- name: Repair summary
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('Recreated ' + (repair_planned | length | string) + ' instance(s) and approved their CSRs.'
+          if repair_planned | length > 0
+          else 'Nothing to recreate — Terraform reports no missing infrastructure.')
+      }}
+      {{ ('Removed ' + (repair_stale_nodes | length | string) + ' stale Node object(s).'
+          if repair_stale_nodes | default([]) | length > 0
+          else '') }}
+      Run 'ocplab verify' to confirm the cluster is healthy.

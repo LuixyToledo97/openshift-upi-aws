@@ -1,0 +1,14 @@
+---
+# Same bounded probe verify uses — repair should refuse quickly against a
+# cluster that is down, not hang on the Kubernetes client's own timeout.
+repair_api_reachability_timeout: 15
+
+# The plan is written next to the run's own log, like every other terraform
+# invocation, so it can be read afterwards when repair refuses to apply it.
+repair_tf_render: "{{ playbook_dir }}/../roles/infra/files/tf_render.py"
+repair_plan_log: >-
+  {{ ((lookup('ansible.builtin.env', 'OCPLAB_LOG_FILE') | regex_replace('\.log$', ''))
+      or '/tmp/ocplab-repair') }}_terraform-plan.log
+repair_plan_raw: >-
+  {{ ((lookup('ansible.builtin.env', 'OCPLAB_LOG_FILE') | regex_replace('\.log$', ''))
+      or '/tmp/ocplab-repair') }}_terraform-plan.jsonl

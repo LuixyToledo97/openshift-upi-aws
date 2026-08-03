@@ -657,6 +657,7 @@ verification — lives in the Ansible roles listed above.
 | `ocplab cost` | Approximate current USD/hour cost of what's actually deployed | No |
 | `ocplab console` | Prints the console URL and the `kubeadmin` password | No |
 | `ocplab ssh [node]` | Lists the running nodes, or opens a shell on one | No |
+| `ocplab repair` | Recreates a worker that disappeared, on a running cluster | No |
 | `ocplab versions list\|download\|rm` | Manages the cached OpenShift binaries | No |
 | `ocplab destroy` | Ordered teardown of the whole cluster | No (stops billing) |
 | `ocplab power on\|off\|status` | Gracefully power the cluster off/on, or check which it currently is | No (still bills EBS while off) |
@@ -1307,6 +1308,27 @@ provisioned machines, so a reclaimed master is never replaced automatically
 and recovering one means repairing etcd membership by hand. Workers are a
 different proposition: losing one reschedules pods, and `ocplab deploy`
 recreates it.
+
+**When a worker does get reclaimed**, the cluster keeps working — you lose
+capacity, not availability, and pods reschedule onto what's left. Nothing in
+the cluster reacts to AWS's 2-minute notice (UPI has no node-termination
+handler), and the `Node` object stays behind as `NotReady` forever because
+nothing removes it. To put things back:
+
+```bash
+ocplab repair
+```
+
+It recreates the missing instance, approves the new node's CSRs, and removes
+the orphaned `Node` object. It is **not** Spot-specific — a node terminated by
+hand or lost to an AWS failure is recovered exactly the same way.
+
+`repair` is the only command that runs `terraform apply` against a running
+cluster, so it plans first and **refuses anything that isn't add-only**: if
+Terraform wants to change, replace or destroy something, it stops and tells you
+what. It also declines to recreate a *master* — a replacement master needs its
+etcd membership repaired by hand, and an instance that exists but isn't an etcd
+member is worse than an obviously missing one.
 
 Two things to know before using it:
 

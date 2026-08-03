@@ -1,0 +1,49 @@
+---
+# A terminated instance leaves its Node object behind forever — nothing in the
+# cluster removes it, so it sits there NotReady and shows up in every `oc get
+# nodes` and in 'ocplab verify' as a permanently unhealthy node.
+#
+# Deleted only when BOTH conditions hold: the Node is not Ready, AND no running
+# EC2 instance has that private DNS name. The second check is what makes this
+# safe — a node that is merely unhealthy still has its instance, and deleting
+# its Node object would be destructive rather than tidy.
+
+- name: List the cluster's nodes
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ ocplab_kubeconfig }}"
+    kind: Node
+  register: repair_nodes
+
+- name: List the instances that actually exist
+  amazon.aws.ec2_instance_info:
+    profile: "{{ ocplab_aws_profile }}"
+    filters:
+      "tag:Name": "{{ ocplab_cluster_name }}-*"
+      instance-state-name: ["running", "pending"]
+  register: repair_live_instances
+
+- name: Work out which Node objects have no instance behind them
+  ansible.builtin.set_fact:
+    repair_stale_nodes: >-
+      {{ repair_nodes.resources
+         | rejectattr('metadata.name', 'in',
+                      repair_live_instances.instances | map(attribute='private_dns_name') | list)
+         | map(attribute='metadata.name') | list }}
+
+- name: Report and remove them
+  when: repair_stale_nodes | length > 0
+  block:
+    - name: Show which Node objects are being removed
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['These Node objects have no EC2 instance behind them and are being removed:']
+             + (repair_stale_nodes | map('regex_replace', '^', '  - ') | list) }}
+
+    - name: Delete them
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ ocplab_kubeconfig }}"
+        api_version: v1
+        kind: Node
+        name: "{{ item }}"
+      loop: "{{ repair_stale_nodes }}"

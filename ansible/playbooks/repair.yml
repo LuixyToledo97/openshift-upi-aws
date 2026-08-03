@@ -1,0 +1,6 @@
+---
+- name: ocplab repair — recreate a missing worker on a running cluster
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - repair

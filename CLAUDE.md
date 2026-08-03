@@ -67,6 +67,7 @@ All genuinely implemented (nothing is a stub):
 | `destroy` | Ordered teardown of the whole cluster |
 | `power on\|off\|status` | Graceful shutdown/restart, or a read-only power-state check — an alternative to `destroy`, **not** a cost-saving one (EBS/NAT/LBs keep billing while off) |
 | `ssh [node]` | Lists the running nodes, or opens a shell on one, through the EC2 Instance Connect Endpoint (nodes have no public IP) |
+| `repair` | Recreates missing workers on a running cluster, approves their CSRs, prunes orphaned `Node` objects — refuses any plan that isn't add-only |
 | `versions list\|download\|rm` | Manages the cached `openshift-install`/`oc` under `~/.ocplab/bin/<version>/`, pinned by `openshift.version` |
 | `safety-net apply\|status\|destroy` | Budget + Budget Action + killswitch Lambda, outside Terraform |
 | `status` | Local-only summary (`install-dir` age, Terraform resource count) — points to `verify`/`power status` for live state |
@@ -332,6 +333,30 @@ not by preference:
 Real prices, measured in `eu-west-1a` on 2026-08-03: Spot ran ~50-55% below
 on-demand, **not** the 70-90% often quoted. With masters staying on-demand, a
 minimal profile lands near $0.83/h against $1.06/h.
+
+## `ocplab repair`
+
+The only command that runs `terraform apply` against a **running** cluster, so
+its safety model is the feature, not a detail around it:
+
+- **It plans first and inspects the plan.** A repair is add-only: if anything
+  would be changed, replaced or destroyed, it refuses and shows what Terraform
+  wanted to do. That isn't hypothetical — `render` auto-discovers the RHCOS AMI,
+  so a changed `openshift.version` makes Terraform want to replace all three
+  masters. An unguarded `apply` there destroys the cluster it was asked to fix.
+- **It refuses to create masters**, even though creating is not destructive. An
+  instance is not an etcd member: a replacement master arrives with a new
+  private IP, needs the `etcd-N` records repointed and the dead member removed
+  by hand. Pretending to handle that is worse than declining.
+- **It never runs the `ignition` role.** Regenerating `install-dir` mints a new
+  `infraID`, which is in every resource's `default_tags` — re-tagging a live
+  cluster is trap #1 arriving through the back door.
+- **`Node` objects are pruned only when the instance is really gone**, checked
+  against live EC2 rather than assumed from the node's status. A node that is
+  merely unhealthy keeps its instance, and deleting its `Node` object would be
+  destructive rather than tidy.
+
+It is not Spot-specific, though Spot is the usual reason a worker vanishes.
 
 ## Output and logging
 

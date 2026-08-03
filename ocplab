@@ -1386,6 +1386,19 @@ def cmd_verify(args):
     run_ansible_playbook("verify", args)
 
 
+def cmd_repair(args):
+    load_and_validate(args.config)
+    run_ansible_playbook(
+        "repair", args,
+        confirm_msg=(
+            "This runs 'terraform apply' against the RUNNING cluster to recreate "
+            "missing workers, and deletes Node objects whose instance no longer "
+            "exists. The plan is inspected first and refused unless it only creates "
+            "workers. Continue?"
+        ),
+    )
+
+
 def cmd_cost(args):
     load_and_validate(args.config)
     run_ansible_playbook("cost", args)
@@ -1628,6 +1641,24 @@ def build_parser():
 
     p = subparsers.add_parser("console", parents=[sub_global_parser], help="print the console URL and the kubeadmin password")
     p.set_defaults(func=cmd_console)
+
+    p = subparsers.add_parser(
+        "repair", parents=[sub_global_parser],
+        help="recreate a worker that disappeared, on an otherwise healthy cluster",
+        description=(
+            "Recreates workers that Terraform manages but that no longer exist, "
+            "approves the new node's CSRs, and removes Node objects left behind by "
+            "instances that are gone. The usual cause is AWS reclaiming a Spot "
+            "instance (compute.spot), but nothing here is Spot-specific — a node "
+            "terminated by hand, or lost to an AWS failure, is recovered the same "
+            "way. It deliberately never regenerates install-dir, since that would "
+            "change the infraID and break the running cluster, and it refuses to "
+            "apply any plan that would change or destroy anything, or that touches "
+            "a master: a replacement master needs its etcd membership repaired by "
+            "hand, which this cannot do."
+        ),
+    )
+    p.set_defaults(func=cmd_repair)
 
     p = subparsers.add_parser(
         "versions", parents=[sub_global_parser],
