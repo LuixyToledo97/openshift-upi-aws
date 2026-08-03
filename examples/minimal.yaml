@@ -1,0 +1,98 @@
+# A cheaper lab profile — roughly $0.83/h instead of $1.06/h in eu-west-1.
+#
+# Copy this over your cluster.yaml and fill in the placeholders, or copy the
+# three sizing/spot blocks into the config you already have. It is a plain
+# cluster.yaml, not a "mode": there is no hidden switch, and everything it does
+# differently is visible below.
+#
+# Every value here is at or above Red Hat's documented minimum
+# (openshift-docs, installation-minimum-resource-requirements.adoc):
+#
+#   Machine        vCPU  RAM    Storage  IOPS
+#   Bootstrap      4     16 GB  100 GB   300
+#   Control plane  4     16 GB  100 GB   300
+#   Compute        2     8 GB   100 GB   300
+#
+# Going below those is not "minimal", it is unsupported.
+
+apiVersion: ocplab/v1
+kind: ClusterConfig
+
+metadata:
+  name: ocp4lab
+  baseDomain: example.com
+
+platform:
+  aws:
+    region: eu-west-1
+    availabilityZone: eu-west-1a
+    profile: openshift-lab
+    publicHostedZoneId: CHANGEME
+
+networking:
+  vpcCidr: 10.0.0.0/16
+  publicSubnetCidr: 10.0.1.0/24
+  privateSubnetCidr: 10.0.2.0/24
+  clusterNetwork: 10.128.0.0/14
+  serviceNetwork: 172.30.0.0/16
+
+controlPlane:
+  replicas: 3
+  # 4 vCPU / 16 GB, the documented minimum, at ~15% less than m5.xlarge.
+  #
+  # t3 is BURSTABLE: sustained CPU above the baseline consumes credits and then
+  # throttles. etcd wants a 10 ms p99 fsync and does not enjoy being throttled,
+  # so this is a lab-grade choice, not a production one. If a run feels
+  # sluggish under load, m6a.xlarge is non-burstable and still cheaper than
+  # m5.xlarge ($0.1926 vs $0.2140).
+  instanceType: t3.xlarge
+  volumeSize: 100
+  volumeType: gp3
+  # No 'spot' here — it is rejected. In UPI a reclaimed master is not replaced
+  # automatically, and recovering one means repairing etcd membership by hand.
+
+compute:
+  replicas: 2
+  # 2 vCPU / 8 GB, the documented minimum for compute.
+  instanceType: t3.large
+  volumeSize: 100
+  volumeType: gp3
+  # Roughly half price. AWS can reclaim these with 2 minutes' notice; losing a
+  # worker reschedules pods, and 'ocplab deploy' recreates it.
+  # Note: this makes 'ocplab power off' unavailable — Spot instances can only
+  # be terminated, never stopped. Use 'ocplab destroy' instead, which is
+  # cheaper than a stopped cluster anyway.
+  spot: true
+
+bootstrap:
+  instanceType: t3.xlarge
+  volumeSize: 100
+  volumeType: gp3
+  # The safest node to run on Spot: it lives ~20 minutes, and if AWS reclaims
+  # it you re-run the deploy.
+  spot: true
+
+openshift:
+  version: 4.22.6
+
+credentials:
+  pullSecretFile: ~/.ocplab/pull-secret.json
+  sshPublicKeyFile: ~/.ssh/id_ed25519.pub
+
+certificates: {}
+
+safetyNet:
+  enabled: true
+  budgetUsd: 50
+  alertEmails:
+    - your-email@example.com
+  killswitch:
+    enabled: false
+    schedule: "cron(0 22 * * ? *)"
+    timezone: Europe/Madrid
+
+# What this does NOT change, and why the saving stops at ~22%:
+#   NAT gateway, 2 NLBs, the ingress router's Classic ELB and one public IP
+#   come to ~$0.13/h no matter how small the nodes are. In this profile that
+#   is a quarter of the bill. Reducing it further means changing the
+#   architecture, not the instance sizes.

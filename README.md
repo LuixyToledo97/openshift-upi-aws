@@ -1286,6 +1286,42 @@ you if you forget.
 | S3 bucket (empty after destroy) | cents |
 | Killswitch Lambda (~30 invocations/month) | $0 — permanent free tier |
 
+### 🪙 A cheaper profile — smaller nodes and Spot
+
+[`examples/minimal.yaml`](examples/minimal.yaml) is a ready-made
+`cluster.yaml` that gets the same cluster for **≈ $0.83/h instead of
+$1.06/h**. It's a plain config file, not a hidden mode: everything it changes
+is visible in it, with the reasoning inline.
+
+Three levers, in order of how much they're worth:
+
+| Lever | Saving | Notes |
+|---|---|---|
+| **Spot for workers + bootstrap** | ~$0.11/h | Measured at 50-55% off on-demand in `eu-west-1a` — not the 70-90% often quoted |
+| **Smaller instances** (`t3.xlarge` / `t3.large`) | ~$0.13/h | Exactly Red Hat's documented minimums: 4 vCPU / 16 GB control plane, 2 vCPU / 8 GB compute |
+| **100 GB disks instead of 120 GB** | ~$0.01/h | 100 GB is the documented minimum. `gp3` is already the cheapest usable type — `st1`/`sc1` cost less per GB but **AWS does not allow them as boot volumes** |
+
+**The control plane stays on-demand, and `controlPlane.spot` is rejected.** In
+UPI there is no ControlPlaneMachineSet and no Machine API for manually
+provisioned machines, so a reclaimed master is never replaced automatically
+and recovering one means repairing etcd membership by hand. Workers are a
+different proposition: losing one reschedules pods, and `ocplab deploy`
+recreates it.
+
+Two things to know before using it:
+
+- **`ocplab power off` stops working** with Spot workers — a Spot instance can
+  only be terminated, never stopped. `ocplab power off` refuses up front rather
+  than discovering it after draining. Use `destroy` instead, which is cheaper
+  than a stopped cluster anyway.
+- **`t3` is burstable.** Sustained CPU consumes credits and then throttles, and
+  etcd wants a 10 ms p99 fsync. Fine for a lab; if it feels slow under load,
+  `m6a.xlarge` is non-burstable and still cheaper than `m5.xlarge`.
+
+The saving stops around 22% because NAT, the load balancers and the public IP
+come to ~$0.13/h regardless of node size — a quarter of the bill in this
+profile. Going below that means changing the architecture, not the instances.
+
 ### ⏸️ About "stopping" the instances
 
 Stopping the EC2 instances only saves the compute portion (~$0.86/h).

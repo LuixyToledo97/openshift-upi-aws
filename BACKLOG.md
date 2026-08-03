@@ -10,40 +10,6 @@ without having to reconstruct the reasoning from scratch.
 
 ---
 
-## 🪙 "Minimal mode" — a cheaper deployment profile using Spot Instances
-
-**What**: a second deployment path, alongside the current one — not a
-replacement — aimed at the lowest realistic cost for a lab that doesn't need
-to survive an unexpected interruption. Candidate name: `minimal` mode (open
-to a better one).
-
-**What it would change**:
-- AWS Spot Instances instead of On-Demand for masters/workers (and/or
-  bootstrap, which is short-lived anyway and a natural first candidate).
-- EBS volumes reduced to the smallest viable size/type (currently gp3 120GB
-  across the board — revisit what OpenShift actually needs at minimum).
-- Possibly trim other resources/capabilities not strictly required for a
-  bare-functional cluster.
-
-**Why**: the whole project already leans cost-conscious (`ocplab cost`,
-`safety-net`, `power off`) — Spot is the next lever, and a meaningfully
-bigger one (up to ~70-90% off On-Demand for compute).
-
-**Open questions**:
-- Spot instances can be reclaimed by AWS with a 2-minute warning. For a
-  3-master control plane that needs etcd quorum, losing a master
-  unexpectedly is a real risk — needs a clear answer on how disruptive this
-  actually is in practice before calling it a supported mode, not just "use
-  Spot and hope."
-- How is `minimal` mode selected — a field in `cluster.yaml`
-  (`platform.aws.capacityType` or similar), a separate example config, a
-  CLI flag? Needs a decision before touching Terraform.
-- Does this interact with `ocplab power on/off`? Restarting a Spot instance
-  isn't the same guarantee as an On-Demand one (capacity might not be
-  available at restart time).
-
----
-
 ## 📊 Optional monitoring stack (infrastructure + platform)
 
 **What**: an ad-hoc, opt-in monitoring stack giving a centralized view

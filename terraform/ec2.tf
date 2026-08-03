@@ -12,6 +12,15 @@ resource "aws_instance" "bootstrap" {
     volume_type = var.bootstrap_volume_type
   }
 
+  # The safest node to run on Spot: it exists for about twenty minutes and, if
+  # AWS reclaims it, the deploy is re-run rather than repaired.
+  dynamic "instance_market_options" {
+    for_each = var.bootstrap_spot ? [1] : []
+    content {
+      market_type = "spot"
+    }
+  }
+
   tags = {
     Name = "${var.cluster_name}-bootstrap"
   }
@@ -89,6 +98,17 @@ resource "aws_instance" "worker" {
   root_block_device {
     volume_size = var.worker_volume_size
     volume_type = var.worker_volume_type
+  }
+
+  # Losing a worker costs rescheduled pods, not the cluster. There is no
+  # MachineSet to replace it (UPI clusters "do not have machine sets"), so
+  # recovery is a `terraform apply` — which recreates the instance — followed
+  # by the CSR approval ocplab already performs.
+  dynamic "instance_market_options" {
+    for_each = var.worker_spot ? [1] : []
+    content {
+      market_type = "spot"
+    }
   }
 
   tags = {

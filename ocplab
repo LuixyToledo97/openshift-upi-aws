@@ -92,11 +92,24 @@ compute:
   instanceType: m5.large
   volumeSize: 120
   volumeType: gp3
+  # Optional. Run the workers on Spot instances — roughly half the on-demand
+  # price, at the cost of AWS being able to reclaim them with 2 minutes' notice.
+  # Losing a worker reschedules pods rather than breaking the cluster, and
+  # 'ocplab deploy' recreates it. NOT available for controlPlane: see below.
+  # spot: true
 
 bootstrap:
   instanceType: m5.xlarge
   volumeSize: 120
   volumeType: gp3
+  # Optional. The safest node to run on Spot: it lives for about twenty
+  # minutes, and if AWS reclaims it you re-run the deploy.
+  # spot: true
+
+# NOTE on Spot and the control plane: 'controlPlane.spot' is deliberately
+# rejected. In UPI there is no ControlPlaneMachineSet and no Machine API to
+# replace a reclaimed master, so recovering one means editing etcd membership
+# by hand. Spot is offered for compute and bootstrap only.
 
 openshift:
   # Optional. Pin the OpenShift version, and ocplab downloads and caches the
@@ -395,6 +408,25 @@ def validate_cluster_config(cfg, config_path, *, zone_id_optional=False):
 
     if not dig(cfg, "bootstrap", "instanceType"):
         errors.append("missing 'bootstrap.instanceType'")
+
+    for group in ("compute", "bootstrap"):
+        spot = dig(cfg, group, "spot")
+        if spot is not None and not isinstance(spot, bool):
+            errors.append(f"'{group}.spot' must be true or false, not {spot!r}")
+
+    # Rejected rather than merely discouraged. A reclaimed master cannot be
+    # replaced automatically in UPI — there is no ControlPlaneMachineSet and no
+    # Machine API for manually provisioned machines — so recovery means editing
+    # etcd membership by hand on a cluster that is already degraded. That isn't
+    # a trade-off worth offering for a few cents an hour, and it would only be
+    # discovered the day AWS reclaims capacity.
+    if dig(cfg, "controlPlane", "spot"):
+        errors.append(
+            "'controlPlane.spot' is not supported: in UPI a reclaimed master is not "
+            "replaced automatically (no ControlPlaneMachineSet), and recovering one "
+            "means repairing etcd membership by hand. Use 'compute.spot' and "
+            "'bootstrap.spot' instead — those are recoverable with 'ocplab deploy'."
+        )
 
     pull_secret_file = dig(cfg, "credentials", "pullSecretFile")
     if not pull_secret_file:
@@ -726,9 +758,11 @@ def render_tfvars(cfg):
         "worker_instance_type": comp["instanceType"],
         "worker_volume_size": comp.get("volumeSize", 120),
         "worker_volume_type": comp.get("volumeType", "gp3"),
+        "worker_spot": bool(comp.get("spot", False)),
         "bootstrap_instance_type": boot["instanceType"],
         "bootstrap_volume_size": boot.get("volumeSize", 120),
         "bootstrap_volume_type": boot.get("volumeType", "gp3"),
+        "bootstrap_spot": bool(boot.get("spot", False)),
     }
 
     lines = [GENERATED_HEADER, ""]
@@ -768,6 +802,9 @@ def render_ansible_vars(cfg):
         "ocplab_bootstrap_instance_type": cfg["bootstrap"]["instanceType"],
         "ocplab_bootstrap_volume_size": cfg["bootstrap"].get("volumeSize", 120),
         "ocplab_bootstrap_volume_type": cfg["bootstrap"].get("volumeType", "gp3"),
+        # Consumed by 'power off', which cannot stop a Spot instance.
+        "ocplab_compute_spot": bool(cfg["compute"].get("spot", False)),
+        "ocplab_bootstrap_spot": bool(cfg["bootstrap"].get("spot", False)),
         "ocplab_rhcos_ami": dig(cfg, "openshift", "rhcosAmi"),
         "ocplab_pull_secret_file": creds["pullSecretFile"],
         "ocplab_ssh_public_key_file": creds["sshPublicKeyFile"],

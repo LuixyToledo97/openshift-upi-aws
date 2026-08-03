@@ -306,6 +306,33 @@ the project had before. Making it required would force every existing
   not "terraform applied". After any deploy on a version that isn't listed,
   update it — including the failures, which are the part people actually need.
 
+## Spot instances
+
+`compute.spot` and `bootstrap.spot` in `cluster.yaml` put those nodes on Spot.
+Three decisions here are load-bearing and were made against the documentation,
+not by preference:
+
+- **`controlPlane.spot` is rejected by `validate`, on purpose.** Red Hat's
+  `cpmso-limitations.adoc` says a cluster without preexisting control-plane
+  `Machine` objects "cannot use a control plane machine set or enable the use
+  of a control plane machine set after installation", and that the operator is
+  "not supported on clusters with manually provisioned machines". UPI has
+  neither, so a reclaimed master is never replaced automatically and recovering
+  one means repairing etcd membership by hand. Workers are different: losing
+  one reschedules pods, and `terraform apply` recreates it.
+- **One-time requests, `terminate` behaviour.** AWS supports Spot requests that
+  *stop* instead of terminating (preserving the disk), but only for
+  `persistent` requests — and a persistent request outlives the instance it
+  launched and can relaunch it, potentially into a VPC being destroyed. Given
+  trap #4's history, a predictable teardown wins.
+- **Spot and `power off` are mutually exclusive**, and `power off` refuses up
+  front rather than discovering it after cordoning and draining: a one-time
+  Spot instance can only be terminated, never stopped.
+
+Real prices, measured in `eu-west-1a` on 2026-08-03: Spot ran ~50-55% below
+on-demand, **not** the 70-90% often quoted. With masters staying on-demand, a
+minimal profile lands near $0.83/h against $1.06/h.
+
 ## Output and logging
 
 `ansible/callback_plugins/ocplab_output.py` is the `stdout_callback` for

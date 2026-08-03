@@ -9,6 +9,25 @@
 # masters, so the control plane (holding the API VIP) is the last thing
 # to go.
 
+# Refused up front, not discovered halfway through a shutdown. A one-time Spot
+# instance cannot be stopped — only terminated — so 'power off' would cordon
+# and drain the workers and then be unable to actually stop them, leaving a
+# half-shut-down cluster. Better to say so before touching anything.
+#
+# (AWS does support Spot requests that stop rather than terminate, but only for
+# 'persistent' requests, which this project deliberately doesn't use: a
+# persistent request outlives its instance and can relaunch it during a
+# teardown. See terraform/variables-ec2.tf.)
+- name: Refuse to power off a cluster whose workers are Spot instances
+  ansible.builtin.assert:
+    that: not (ocplab_compute_spot | default(false) | bool)
+    fail_msg: >-
+      'ocplab power off' can't stop Spot instances — AWS only allows terminating
+      them, so compute.spot and power off are mutually exclusive. Either set
+      compute.spot to false and redeploy, or use 'ocplab destroy' instead
+      (which is cheaper than leaving a cluster stopped anyway — stopped
+      instances keep billing for their EBS volumes).
+
 - name: Set master/worker node names (= EC2 private DNS names)
   ansible.builtin.set_fact:
     power_master_node_names: "{{ power_master_instances.instances | map(attribute='private_dns_name') | list }}"

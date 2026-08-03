@@ -24,6 +24,27 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Spot instances for compute and bootstrap nodes: `compute.spot` and
+  `bootstrap.spot` in `cluster.yaml`, both defaulting to false. Measured in
+  `eu-west-1a`, Spot ran 50-55% below on-demand — worth correcting against the
+  70-90% figure that gets quoted.
+
+  `controlPlane.spot` is **rejected**. In UPI there is no
+  ControlPlaneMachineSet and no Machine API for manually provisioned machines,
+  so a reclaimed master is never replaced automatically and recovering one
+  means repairing etcd membership by hand. Workers and the bootstrap are
+  recoverable — `terraform apply` recreates them and ocplab already approves
+  the CSRs — which is why the choice is per node group rather than one
+  "minimal mode" switch that would force the same answer on all three.
+
+  Requests are one-time with the default `terminate` behaviour. AWS supports
+  Spot requests that stop rather than terminate, preserving the disk, but only
+  for `persistent` requests — and a persistent request outlives its instance
+  and can relaunch it, possibly into a VPC midway through being destroyed.
+
+  `ocplab power off` now refuses when workers are on Spot, before cordoning or
+  draining anything: a one-time Spot instance can only be terminated, never
+  stopped.
 - README §2.1.1: a tested-versions table. `ocplab versions list` shows what the
   mirror publishes, which says nothing about what has actually been run — the
   table records only versions that completed a real deploy → verify → ssh →
