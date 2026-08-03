@@ -380,6 +380,14 @@ every playbook run. Two things about it are load-bearing:
 Log writes are best-effort and swallow their own errors: losing the log must
 never take down a `deploy` that is otherwise fine.
 
+**The terminal is best-effort too, and that is the more important half.** The
+log is written *before* stdout in `_emit`, and every write to stdout is
+wrapped. Found the hard way on 2026-08-03: a deploy was left running and its
+terminal window closed; the first task to finish afterwards raised writing to a
+stdout with no terminal behind it and killed the whole playbook — silently,
+mid-install, with the bootstrap still up and billing and four CSRs unapproved.
+Closing a window must cost the live view and nothing else.
+
 ## Conventions
 
 - Documentation and comments **in English**.

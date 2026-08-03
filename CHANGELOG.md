@@ -8,6 +8,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Closing the terminal killed a running `deploy`. The stdout callback wrote to
+  `sys.stdout` unguarded, so once the terminal window was gone the first task
+  to complete raised and took the whole playbook down — silently, mid-install,
+  leaving the bootstrap running and billing and its CSRs unapproved. Every
+  terminal write is now guarded, and the log is written *before* stdout rather
+  than after: the on-disk record is the durable half, the live view is the
+  disposable one. Losing a window now costs the view and nothing else.
 - `destroy` could fail with `DependencyViolation` on the internet gateway
   because the ingress router's ELB came back after being deleted. Deleting the
   default `IngressController` doesn't remove it — the cluster-ingress-operator

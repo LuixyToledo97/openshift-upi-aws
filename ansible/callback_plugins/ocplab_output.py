@@ -143,17 +143,32 @@ class CallbackModule(CallbackBase):
 
     def _clear_pending(self):
         if self._pending is not None and self._interactive:
-            sys.stdout.write(CLEAR_LINE)
-            sys.stdout.flush()
+            try:
+                sys.stdout.write(CLEAR_LINE)
+                sys.stdout.flush()
+            except (OSError, ValueError):
+                self._interactive = False
         self._pending = None
 
     def _emit(self, line, log=True):
-        """Print a finished line, replacing any in-place 'running' line."""
+        """Print a finished line, replacing any in-place 'running' line.
+
+        The log is written even when the terminal write fails, and in that
+        order, because the terminal is the disposable half of this. Found the
+        hard way on 2026-08-03: a deploy was left running, its terminal window
+        closed, and the first task to finish afterwards raised writing to a
+        stdout with no terminal behind it — killing the whole playbook silently,
+        mid-install, with the bootstrap still up and billing. A closed window
+        must cost you the live view and nothing else.
+        """
         self._clear_pending()
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
         if log:
             self._log(self._strip(line))
+        try:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            self._interactive = False  # stop trying to rewrite lines in place
 
     @staticmethod
     def _strip(text):
@@ -171,8 +186,11 @@ class CallbackModule(CallbackBase):
     def _show_running(self, text):
         if not self._interactive:
             return
-        sys.stdout.write(CLEAR_LINE + self._c(f"  ⋯ {text}", DIM))
-        sys.stdout.flush()
+        try:
+            sys.stdout.write(CLEAR_LINE + self._c(f"  ⋯ {text}", DIM))
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            self._interactive = False
 
     # -- helpers -----------------------------------------------------------
 
