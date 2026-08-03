@@ -52,9 +52,11 @@ EU-EBS:VolumeUsage.gp3   $1.67
 EU-NatGateway-Hours      $1.44
 ```
 
-Six deploys in that window, so roughly **$1.50 of data charges per deploy** —
-about 33 GB each, which is what six nodes each pulling their own copy of the
-OpenShift release payload costs. The images arrive from the internet, where
+Per deploy, from the NAT gateway's CloudWatch `BytesInFromDestination` rather
+than divided out of the monthly total: **35.2 GB across ten deploys, ≈$1.58
+each** — six nodes pulling their own copy of the release payload. Those metrics
+outlive the gateway, so the baseline was reconstructed from ten
+already-destroyed NAT gateways, one datapoint per deploy. The images arrive from the internet, where
 inbound transfer is free; the charge is entirely the NAT gateway's per-GB
 processing ("Data processing charges apply for each gigabyte processed through
 the NAT gateway regardless of the traffic's source or destination").
