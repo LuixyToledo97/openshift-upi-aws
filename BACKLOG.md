@@ -92,3 +92,54 @@ go through the internet gateway, where inbound is free. It would remove the
 charge almost entirely and cost only ~$0.025/h in public IPs — but the private
 node topology is the thing this repository exists to reproduce, and `ocplab ssh`
 is built on it. Cheaper is not the only axis.
+
+---
+
+## 🎯 `oc` points at the wrong cluster, not just the wrong version
+
+**What**: after `ocplab deploy`, typing `oc get nodes` by hand talks to
+whatever `~/.kube/config` has as its current context — for Luis on 2026-08-03,
+a leftover Docker Desktop cluster. The cluster's kubeconfig is at
+`install-dir/auth/kubeconfig`, and only ocplab knows that: every role passes it
+explicitly, so the tooling works while the human's shell doesn't.
+
+**Why it matters**: we solved half of this already. `openshift.version` links
+`oc` into `.venv/bin` so the *version* matches the cluster. The *cluster* it
+points at was left unsolved, and that half is the more dangerous one — the
+failure isn't "can't find the cluster", it's connecting to a **different**
+cluster in silence. An `oc delete` in that state goes somewhere unintended.
+
+**Options, none decided**:
+- Document it and stop there — `export KUBECONFIG=$PWD/install-dir/auth/kubeconfig`.
+- Have `ocplab console` print the export line beside the URL and password.
+- Have `ocplab setup` append the export to `.venv/bin/activate`, with a matching
+  restore in `deactivate`. Best result, most invasive: it changes KUBECONFIG for
+  everything in that shell, not just ocplab.
+
+The venv already has to be activated for ocplab to work at all, which is what
+makes the third option tempting and also what makes it presumptuous.
+
+---
+
+## 💱 `ocplab cost` prices Spot instances at on-demand rates
+
+**What**: the cost report looks up `ec2:<instance_type>` on-demand pricing for
+every instance, including ones running as Spot. Measured on 2026-08-03 against
+a live minimal-profile cluster: reported **$0.9213/h**, real **$0.8269/h** —
+inflated by **11.4%**.
+
+**Why it matters**: same reasoning as the Classic ELB fix that shipped the same
+day. A cost tool that is quietly wrong is worse than no number, and this one is
+wrong in the direction that makes the Spot feature look less effective than it
+is.
+
+**What it would take**: `describe-spot-price-history` for the instance types
+that are actually running as Spot, keyed off `InstanceLifecycle == "spot"`
+which `ec2_instance_info` already returns. Spot prices move, so the existing
+pricing cache is the wrong shape for them — a cached Spot price would be as
+misleading as an on-demand one.
+
+**Open question**: Spot prices change by the hour, so any figure is a snapshot.
+Is the honest presentation a current-price estimate, or a separate line saying
+"2 instances on Spot, priced at the current rate" so nobody mistakes it for a
+guarantee?
