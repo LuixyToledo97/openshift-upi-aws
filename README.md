@@ -1318,8 +1318,18 @@ and this is a usage charge that only appears on the bill afterwards. The
 disclaimer at the bottom of its report ("excludes data transfer") is doing more
 work than it looks.
 
-A mirror or pull-through cache would remove most of it; it's in
-[BACKLOG.md](BACKLOG.md).
+**Disabling optional cluster capabilities cuts about a third of it.** Measured
+on 2026-08-03 against a ten-deploy baseline of 35.2 GB: the set in
+`examples/minimal.yaml` brought one deploy down to **24.8 GB, 29% less**, worth
+~$0.46 a time — and left the cluster healthy, with 27 ClusterOperators instead
+of 34. It costs real functionality, though: no internal image registry, no S2I
+builds, no OperatorHub catalogue. `ocplab init --minimal` includes it; the
+standard profile documents it commented-out, so you can enable it there too.
+
+The ~24.8 GB that remain are mostly the base payload, which every node pulls
+its own copy of. A mirror or pull-through cache would deduplicate that; it's in
+[BACKLOG.md](BACKLOG.md), with the arithmetic for when it pays for itself
+(roughly seventeen deploys a month).
 
 ### 🪙 A cheaper profile — smaller nodes and Spot
 

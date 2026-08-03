@@ -75,6 +75,30 @@ bootstrap:
 openshift:
   version: 4.22.6
 
+  # Measured, not estimated: this set brought a deploy from ~35 GB of image
+  # pulls down to 24.8 GB — 29% less, worth about $0.46 per deploy in NAT data
+  # processing (README §8). Seven fewer operators also means less RAM and CPU
+  # on the nodes.
+  #
+  # It costs you real functionality. This cluster has NO internal image
+  # registry, NO S2I builds or DeploymentConfigs, and NO OperatorHub catalogue.
+  # If you need any of those, add the capability back — you'll pay for it in
+  # data transfer, not in anything worse.
+  #
+  # The first three are not optional: the installer refuses to disable them on
+  # AWS, and 'ocplab validate' says so before you get as far as deploying.
+  capabilities:
+    baselineCapabilitySet: None
+    additionalEnabledCapabilities:
+      - CloudCredential            # required on AWS
+      - CloudControllerManager     # required on AWS — see CLAUDE.md trap #1
+      - Ingress                    # required, always
+      - MachineAPI                 # finalize deletes the CPMS, which lives here
+      - Console                    # without it 'ocplab console' has nothing to open
+      - Storage                    # the EBS CSI driver; without it, no dynamic PVCs
+      - CSISnapshot
+      - OperatorLifecycleManager   # installing operators at all
+
 credentials:
   pullSecretFile: ~/.ocplab/pull-secret.json
   sshPublicKeyFile: ~/.ssh/id_ed25519.pub

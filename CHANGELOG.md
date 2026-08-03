@@ -72,8 +72,18 @@ uses [Semantic Versioning](https://semver.org/).
   reading around it. `validate` enforces it so the failure arrives at
   `ocplab validate` instead of several commands later.
 
-  How much it saves is deliberately not quoted: capabilities take effect in the
-  CVO at runtime, so it can only be measured against a real bill.
+  Measured rather than estimated: against a ten-deploy baseline of 35.2 GB, the
+  set now shipped in `examples/minimal.yaml` brought a deploy down to 24.8 GB —
+  **29% less, about $0.46 a time** — with the cluster healthy at 27
+  ClusterOperators instead of 34. It costs real functionality: no internal
+  image registry, no S2I builds, no OperatorHub catalogue. `init --minimal`
+  enables it; the standard template documents it commented-out.
+
+  Both figures come from the NAT gateway's `BytesInFromDestination` metric in
+  CloudWatch, which outlives the gateway — so the baseline was reconstructed
+  from ten already-destroyed NAT gateways, one datapoint per deploy. Cost
+  Explorer could not have answered this: it lags a day and nets credits against
+  usage, which is why the first look at the bill showed zeros.
 - `ocplab init --minimal` writes the cheaper profile instead of the standard
   one. The flag makes it discoverable: an example only helps people who already
   know it exists.

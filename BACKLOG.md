@@ -63,6 +63,15 @@ For short lab cycles this dominates. A one-hour deploy-test-destroy run costs
 roughly $1.06 of infrastructure and $1.50 of traffic — and it puts the Spot
 work in perspective, which saves ~$0.11/h of compute.
 
+**Updated 2026-08-03, after trimming capabilities.** Disabling optional
+components took a deploy from 35.2 GB to 24.8 GB, so the ceiling for a mirror
+is now the ~24.8 GB that remain — mostly the base payload, which each of the
+six nodes pulls its own copy of. At $0.045/GB a mirror might save ~$0.90 a
+deploy against ~$15/month for a small always-on instance: **break-even is
+around seventeen deploys a month**. During active development on this repo
+(eleven deploys in nine days) it pays; for occasional lab use it does not.
+That makes this a question about how the lab is used, not a technical one.
+
 **Open questions**:
 - Where does the mirror live? It only pays off if it survives between deploys,
   which means persistent infrastructure that costs money of its own. An S3-backed

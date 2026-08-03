@@ -339,10 +339,16 @@ baseline values, and the capability names come from `ClusterVersionCapability`
 in `openshift/api`. Omit the section entirely and the installer's default
 (`vCurrent`) applies, which is what every deploy did before this existed.
 
-**How much this actually saves is unmeasured.** Capabilities are applied by the
-CVO at runtime, so generating manifests locally does not answer it — the number
-only shows up as `EU-NatGateway-Bytes` on a later bill. Don't quote a figure
-until a deploy has been compared against the ~33 GB baseline.
+**Measured on 2026-08-03**: the set in `examples/minimal.yaml` took a deploy
+from a ten-deploy baseline of 35.2 GB down to **24.8 GB — 29% less**, with the
+cluster healthy at 27 ClusterOperators instead of 34.
+
+The measurement did not come from the bill. NAT gateways publish
+`BytesInFromDestination` to CloudWatch, those metrics outlive the gateway, and
+one datapoint per deploy gives an exact per-deploy figure instead of a monthly
+total — which is also how the 35.2 GB baseline was reconstructed from ten
+already-destroyed NAT gateways. Cost Explorer has a 24-hour lag and nets
+credits against usage; CloudWatch does neither.
 
 ## Spot instances
 
