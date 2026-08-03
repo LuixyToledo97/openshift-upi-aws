@@ -187,9 +187,66 @@ sudo mv openshift-install oc kubectl /usr/local/bin/
 openshift-install version && oc version --client
 ```
 
-`ocplab preflight` checks all four of the binaries above are on the PATH
-before you ever touch AWS — regardless of which OS/package manager put
-them there.
+`ocplab preflight` checks the binaries above are on the PATH before you ever
+touch AWS — regardless of which OS/package manager put them there.
+
+**Or let `ocplab` manage the OpenShift binaries for you.** That `latest` in
+the URLs above is a moving target: clone this repo a month from now and you
+get a different cluster from the same config. Pin the version instead and
+`ocplab` downloads and caches it, so `openshift-install` and `oc` don't need
+installing by hand at all:
+
+```bash
+ocplab versions list                 # what's published, and what you have
+ocplab versions download 4.22.6      # checksum-verified, cached
+```
+
+```
+    VERSION    CHANNEL        RELEASED       CACHED
+    ---------- -------------- -------------- ------
+  * 4.22.6     stable-4.22    28 Jul 2026    yes
+    4.21.25    stable-4.21    28 Jul 2026    no
+    4.20.30    stable-4.20    28 Jul 2026    no
+    ...
+```
+
+Then set it in `cluster.yaml`:
+
+```yaml
+openshift:
+  version: 4.22.6
+```
+
+From then on ocplab uses that exact version — including for the RHCOS AMI,
+which it reads from the installer binary itself, so one field pins both the
+cluster and its node image. `oc` and `kubectl` are symlinked into the venv, so
+typing `oc get co` by hand gets the matching client.
+
+To change version later, edit `openshift.version` and run
+`ocplab versions download` — it fetches the version if you don't have it and
+repoints the links either way. Any command that reads the config does the
+same, so `ocplab status` is enough when it's already downloaded. Whenever the
+links actually move, ocplab says so:
+
+```
+Linked openshift-install, oc, kubectl to OpenShift 4.22.6 in .venv/bin.
+  If 'oc version' still reports another version, run 'hash -r' — your shell
+  remembers where a command lived the first time you ran it.
+```
+
+> That `hash -r` only bites **once**, the first time you pin a version in a
+> shell that had already used the `oc` you installed by hand. After that the
+> cached path is the symlink itself, so later version changes are picked up
+> with nothing to do. Confusingly, `which oc` never consults that cache, so it
+> shows the new path while `oc` still runs the old binary.
+
+Each version takes ~795 MB on disk (`ocplab status` shows the total,
+`ocplab versions rm <version>` frees one). Leave `openshift.version` unset and
+nothing changes: the binaries on your PATH are used, exactly as before.
+
+**Only 4.22 has been tested end to end.** Other versions download and run, but
+the workarounds documented in `CLAUDE.md` were found against 4.22 specifically
+— treat anything else as unverified.
 
 ### 2.2 🛠️ Setting up `ocplab`
 
@@ -384,11 +441,14 @@ With `baseDomain: aws.example.com` and `metadata.name: ocp4lab` in
 │   ├── security-groups.tf         # master and worker SGs
 │   ├── load-balancers.tf          # external/internal NLB + target groups
 │   ├── route53.tf                 # DNS records (public and private zone)
+│   ├── instance-connect.tf        # EC2 Instance Connect Endpoint (how `ocplab ssh` gets in)
 │   ├── bootstrap.tf                # S3 bucket with bootstrap.ign
 │   └── ec2.tf                     # instances + target group attachments
 │
 ├── ansible/
 │   ├── ansible.cfg
+│   ├── callback_plugins/
+│   │   └── ocplab_output.py       # readable CLI output + writes the execution log
 │   ├── requirements.yml           # collections: amazon.aws, community.general, kubernetes.core
 │   ├── inventory/
 │   │   ├── localhost.yml          # everything runs locally, no remote nodes
@@ -414,6 +474,8 @@ With `baseDomain: aws.example.com` and `metadata.name: ocp4lab` in
 │       ├── kubeconfig
 │       └── kubeadmin-password
 │
+├── logs/                          # GENERATED — one plain-text log per run, gitignored
+│
 └── archive/                       # install-dir from previous runs
 ```
 
@@ -435,10 +497,96 @@ archive/
 terraform/terraform.tfvars
 ansible/inventory/group_vars/all/generated.yml
 
+# Per-run execution logs — live AWS identifiers, local history, not source
+logs/
+
 __pycache__/
 *.pyc
 .venv/
 ```
+
+### 🔐 Getting a shell on a node — `ocplab ssh`
+
+```bash
+ocplab ssh
+```
+
+```
+NODE      INSTANCE              PRIVATE DNS
+master-0  i-0132c40888832801c   ip-10-0-2-75.eu-west-1.compute.internal
+master-1  i-0ee55ff66aa77bb88   ip-10-0-2-38.eu-west-1.compute.internal
+worker-0  i-0aa11bb22cc33dd44   ip-10-0-2-140.eu-west-1.compute.internal
+```
+
+```bash
+ocplab ssh master-0
+```
+
+Anything after the node name goes straight to `ssh`, so one-shot commands
+work too:
+
+```bash
+ocplab ssh master-0 sudo crictl ps
+```
+
+**How it reaches them.** Masters and workers have no public IP and live in
+the private subnet — the `SSH from my IP` rules in `security-groups.tf` are
+real, but on their own there is no route in from the internet. Instead of
+giving the nodes public addresses (which would mean moving them to the public
+subnet and giving up the topology this lab exists to reproduce) or running a
+bastion (another instance to pay for and tear down in the right order), the
+connection goes through an **EC2 Instance Connect Endpoint**: an
+identity-aware TCP proxy that authenticates and authorizes with IAM before
+traffic reaches the VPC. AWS charges nothing for it, and because this lab is
+single-AZ, the cross-AZ data transfer charge doesn't apply either.
+
+The node names are the ones Terraform already assigns (`master-0`,
+`worker-1`), not a second naming scheme. The key is the one from
+`credentials.sshPublicKeyFile`, minus the `.pub`. Host keys are kept in
+`~/.ocplab/known_hosts` rather than your own, since this lab recreates its
+instances constantly and every rebuild would otherwise leave a dead entry
+behind.
+
+Two limits worth knowing: an endpoint allows 20 concurrent connections, and a
+single connection lasts at most one hour before you have to reconnect.
+
+### 📜 Output and execution logs
+
+Every command that runs a playbook prints a compact, readable stream rather
+than raw Ansible: one line per task, skipped tasks hidden, and the roles'
+own reports (the `verify` problem list, the `cost` breakdown, the hosted-zone
+nameservers) shown as the payload they are.
+
+Each run also writes a full plain-text log under `logs/`, named after the
+command and when it started:
+
+```
+logs/2026-08-02_092654_verify.log
+logs/2026-08-02_101530_bootstrap-apply.log
+logs/2026-08-02_104512_deploy.log
+logs/2026-08-02_110004_verify-dry-run.log
+```
+
+The path is printed **before** the run starts, so a long `deploy` can be
+followed from a second terminal:
+
+```bash
+tail -f logs/2026-08-02_104512_deploy.log
+```
+
+The log holds more than the terminal does — every skipped task, and the
+complete result of anything that failed. When a command fails, `ocplab`
+prints what failed and points at that file.
+
+Two escape hatches:
+
+- `-v` / `-vv` switches back to raw Ansible output. The run is still logged,
+  written by Ansible's own logger instead.
+- `NO_COLOR=1` disables colour. Colour is also dropped automatically when
+  the output isn't a terminal, so piping or redirecting gives clean text.
+
+Logs are never pruned automatically — they're small, but they accumulate.
+Delete `logs/` whenever you like; nothing depends on it.
 
 ---
 
@@ -466,16 +614,27 @@ verification — lives in the Ansible roles listed above.
 | `ocplab verify` | Live cluster health: `ClusterVersion`, node readiness, `ClusterOperators` | No |
 | `ocplab cost` | Approximate current USD/hour cost of what's actually deployed | No |
 | `ocplab console` | Prints the console URL and the `kubeadmin` password | No |
+| `ocplab ssh [node]` | Lists the running nodes, or opens a shell on one | No |
+| `ocplab versions list\|download\|rm` | Manages the cached OpenShift binaries | No |
 | `ocplab destroy` | Ordered teardown of the whole cluster | No (stops billing) |
 | `ocplab power on\|off\|status` | Gracefully power the cluster off/on, or check which it currently is | No (still bills EBS while off) |
 | `ocplab safety-net apply\|status\|destroy` | Manage the budget/killswitch, outside Terraform | No |
 
 Global flags, valid before or after the subcommand: `-f/--config` (path to
 `cluster.yaml`, default `./cluster.yaml`), `--dry-run` (maps to Ansible's
-`--check --diff` — preview without touching anything), `-v`/`-vv`
-(verbosity), `--yes` (skip the interactive confirmation), `--tags`.
-`ocplab --version` prints the current version (see
+`--check --diff` — preview without changing anything in AWS or in the
+cluster), `-v`/`-vv` (verbosity), `--yes` (skip the interactive
+confirmation), `--tags`. `ocplab --version` prints the current version (see
 [CHANGELOG.md](CHANGELOG.md)).
+
+One deliberate exception to "changes nothing": under `--dry-run`, commands
+still refresh the two generated files from `cluster.yaml` before running.
+They're gitignored, deterministic, and rebuilt in under a second — and
+without that, a dry-run would inspect whatever the previous render left
+behind and answer confidently about a config you no longer have. The
+`render` command itself is the exception to the exception: there the
+generated files *are* the subject of the command, so `ocplab render
+--dry-run -v` shows the diff and writes nothing.
 
 ### 📝 `cluster.yaml`
 

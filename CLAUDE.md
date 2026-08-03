@@ -26,6 +26,14 @@ ROSA nor IPI.
   `ansible/inventory/group_vars/all/generated.yml`, and invokes
   `ansible-playbook`. All actual logic — AWS calls, idempotency, health
   checks — lives in Ansible roles, not in the Python script.
+  - **`ocplab ssh` is the one deliberate exception**, and should stay the
+    only one. An Ansible module never hands over the terminal, so a task
+    physically cannot give you an interactive shell. The exception is kept
+    narrow: the command resolves a node name to an instance ID and then
+    `execvp`s into `ssh`, replacing the process — so there is no AWS logic
+    to speak of, and nothing of ocplab is left running during the session.
+    If a future command needs a TTY, follow this shape; if it doesn't, it
+    belongs in a role.
 - **Terraform is fixed `.tf` files + a generated `terraform.tfvars`**,
   not Jinja2-templated `.tf` files. Easier to read and debug than
   templated infrastructure code.
@@ -58,6 +66,8 @@ All genuinely implemented (nothing is a stub):
 | `console` | Prints the console URL and the `kubeadmin` password |
 | `destroy` | Ordered teardown of the whole cluster |
 | `power on\|off\|status` | Graceful shutdown/restart, or a read-only power-state check — an alternative to `destroy`, **not** a cost-saving one (EBS/NAT/LBs keep billing while off) |
+| `ssh [node]` | Lists the running nodes, or opens a shell on one, through the EC2 Instance Connect Endpoint (nodes have no public IP) |
+| `versions list\|download\|rm` | Manages the cached `openshift-install`/`oc` under `~/.ocplab/bin/<version>/`, pinned by `openshift.version` |
 | `safety-net apply\|status\|destroy` | Budget + Budget Action + killswitch Lambda, outside Terraform |
 | `status` | Local-only summary (`install-dir` age, Terraform resource count) — points to `verify`/`power status` for live state |
 
@@ -78,8 +88,11 @@ confirmation), `--tags`.
 ├── templates/              # install-config.yaml — historical reference only,
 │                            #   no longer used at runtime (ignition generates its own)
 ├── terraform/               # ~60 resources
+│   └── instance-connect.tf  #   EC2 Instance Connect Endpoint — how `ocplab ssh` gets in
 ├── ansible/
 │   ├── ansible.cfg
+│   ├── callback_plugins/
+│   │   └── ocplab_output.py  # stdout callback: readable output + writes logs/
 │   ├── requirements.yml    # collections (amazon.aws, community.general, kubernetes.core)
 │   ├── inventory/
 │   │   ├── localhost.yml
@@ -91,7 +104,8 @@ confirmation), `--tags`.
 │       ├── preflight/      # binaries, AWS credentials, pull secret, DNS, AMI
 │       ├── bootstrap/      # IAM user, public hosted zone, SSH key — creates, doesn't verify
 │       ├── ignition/       # install-config.yaml -> manifests -> Ignition configs
-│       ├── infra/          # terraform apply/destroy (reused by cluster_boot and teardown)
+│       ├── infra/          # terraform apply/destroy, streamed via -json + files/tf_render.py
+│       │                     #   (reused by cluster_boot and teardown)
 │       ├── cluster_boot/   # wait-for bootstrap-complete + destroys the bootstrap
 │       ├── finalize/       # CSR approval, deletes CPMS, wait-for install-complete, custom certs
 │       ├── teardown/       # cleans up orphaned ELB/ENI/SG + terraform destroy
@@ -100,6 +114,7 @@ confirmation), `--tags`.
 │       ├── power/          # graceful on/off/status — alternative to destroy, still bills EBS while off
 │       └── cost/           # read-only: live AWS state + cached Pricing API data -> $/hour
 ├── install-dir/            # generated, ephemeral (24h-expiring credentials — never commit)
+├── logs/                    # generated, one plain-text log per run — gitignored
 └── archive/                 # install-dir from previous runs
 ```
 
@@ -221,11 +236,80 @@ Extra: the `ControlPlaneMachineSet` always stays `Degraded` in UPI (no
   Ansible only auto-loads `group_vars/`/`host_vars/` next to the
   inventory file or next to the playbook being run — anywhere else fails
   *silently* (vars come back `undefined`, no error).
+- **The `SSH from my IP` rules in `security-groups.tf` do nothing on their
+  own.** Masters and workers sit in the private subnet with no public IP, so
+  there is no route in from the internet however open the security group is.
+  Access goes through the EC2 Instance Connect Endpoint
+  (`terraform/instance-connect.tf`), whose traffic the nodes already accept
+  under their existing "all internal VPC traffic" rule — which is why adding
+  `ocplab ssh` needed no security-group change at all. Don't "fix" the
+  my-IP rules by widening them; they are not the mechanism.
 - Master nodes in this topology are schedulable and carry
   `node-role.kubernetes.io/worker` in addition to `master` — a
   worker-only query by label will also match masters. Target nodes by
   exact name (from the EC2 instance's own `private_dns_name`, which is
   also what OpenShift names the node) instead.
+
+## The OpenShift binaries
+
+`openshift.version` in `cluster.yaml` is **optional**, and that is deliberate:
+declaring it opts into managed binaries, omitting it keeps the PATH behaviour
+the project had before. Making it required would force every existing
+`cluster.yaml` to be migrated — a major version bump for no benefit.
+
+- **Never invoke `openshift-install` or `oc` by bare name in a role.** Use
+  `{{ ocplab_openshift_install_bin }}` and `{{ ocplab_oc_bin }}`, which
+  `render` sets to either an absolute path under `~/.ocplab/bin/<version>/`
+  or the bare name. That one indirection is what makes pinned and unpinned
+  the same code path everywhere.
+- **ocplab resolves binaries by absolute versioned path, never through the
+  symlinks.** The `.venv/bin/{oc,kubectl,openshift-install}` links exist only
+  so a human typing `oc get co` gets the matching client; if ocplab used them,
+  changing the version mid-operation would swap the binary under a running
+  deploy.
+- **`sync_managed_binaries()` is the single owner of those links**, and it is
+  called from `render`, `status` and `versions` — not from `render` alone.
+  That was the first attempt, on the reasoning that render precedes every
+  command; it doesn't. `status` is local and never renders, and `versions`
+  skips rendering on purpose (rendering needs the very binary it may be
+  downloading). Those two are exactly what you run right after pinning a
+  version, so the links stayed stale while `status` cheerfully reported the
+  new version as active. Any new command that reads the config and may touch
+  disk should call it too.
+- **A shell that already ran `oc` keeps calling the old path** even after the
+  symlink is created — bash caches command locations per session, and `which`
+  doesn't consult that cache, so `which oc` shows the new path while `oc`
+  runs the old binary. It looks exactly like a failed download and isn't one.
+  `hash -r` clears it. Worth suggesting before debugging anything else when a
+  reported client version doesn't match the pinned one.
+- **Only exact `x.y.z` is accepted, never a channel.** Since every command
+  re-renders, a channel like `stable-4.22` would be re-resolved on each
+  invocation and could move under a live cluster. `ocplab versions list` is
+  how you find the concrete version to write.
+- The RHCOS AMI is discovered from the installer binary itself, so pinning the
+  version pins the node image too — one field controls both.
+
+## Output and logging
+
+`ansible/callback_plugins/ocplab_output.py` is the `stdout_callback` for
+every playbook run. Two things about it are load-bearing:
+
+- **The roles' `debug` and `assert` messages are the user-facing product**,
+  not scaffolding — `verify`'s problem list, `cost`'s report, `bootstrap`'s
+  nameserver table. The callback promotes them and collapses everything
+  else. When adding a task whose output the user is meant to read, use
+  `debug`/`assert` rather than inventing another channel.
+- **The callback owns both streams**: the terminal rendering *and* the
+  plain-text log at `OCPLAB_LOG_FILE` (set by `run_ansible_playbook`, one
+  file per run under `logs/`). It deliberately does **not** use Ansible's
+  `ANSIBLE_LOG_PATH`, which logs whatever passes through `Display` and would
+  capture the terminal formatting, including the in-place line rewrites.
+  The one exception is `-v`/`-vv`: that falls back to the stock `default`
+  callback, so `ANSIBLE_LOG_PATH` is used for those runs instead — either
+  way exactly one writer, never two.
+
+Log writes are best-effort and swallow their own errors: losing the log must
+never take down a `deploy` that is otherwise fine.
 
 ## Conventions
 
