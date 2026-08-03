@@ -59,7 +59,7 @@ All genuinely implemented (nothing is a stub):
 | Command | What it does |
 |---|---|
 | `prereqs` | Static checklist (no `cluster.yaml`/AWS needed): binaries, credentials, pull secret, DNS delegation |
-| `init` | Writes a starter `cluster.yaml` |
+| `init [--minimal]` | Writes a starter `cluster.yaml` — `--minimal` writes `examples/minimal.yaml` instead (smaller instances, 100 GB disks, Spot workers) |
 | `setup` | Creates the project venv, installs Ansible + collections (`--recreate` to rebuild) |
 | `validate` | Checks `cluster.yaml` for errors, accumulating all of them, not just the first |
 | `render` | `cluster.yaml` → `terraform.tfvars` + `generated.yml` (auto-discovers the RHCOS AMI if unset) |
@@ -339,6 +339,13 @@ not by preference:
 Real prices, measured in `eu-west-1a` on 2026-08-03: Spot ran ~50-55% below
 on-demand, **not** the 70-90% often quoted. With masters staying on-demand, a
 minimal profile lands near $0.83/h against $1.06/h.
+
+**There are two `cluster.yaml` templates and they must be kept in step**: the
+standard one is the `CLUSTER_YAML_EXAMPLE` constant in `ocplab`, the cheaper
+one is `examples/minimal.yaml`, which `ocplab init --minimal` writes verbatim
+(deliberately not a second embedded copy). `validate` catches a *missing
+required* field in either, but nothing catches a new *optional* field that only
+got added to one — so when the schema grows, update both by hand.
 
 ## `ocplab repair`
 

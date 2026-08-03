@@ -1323,10 +1323,15 @@ A mirror or pull-through cache would remove most of it; it's in
 
 ### 🪙 A cheaper profile — smaller nodes and Spot
 
-[`examples/minimal.yaml`](examples/minimal.yaml) is a ready-made
-`cluster.yaml` that gets the same cluster for **≈ $0.83/h instead of
+```bash
+ocplab init --minimal
+```
+
+writes a `cluster.yaml` that gets the same cluster for **≈ $0.83/h instead of
 $1.06/h**. It's a plain config file, not a hidden mode: everything it changes
-is visible in it, with the reasoning inline.
+is visible in it, with the reasoning inline — and it's the same file as
+[`examples/minimal.yaml`](examples/minimal.yaml), readable here without
+running anything.
 
 Three levers, in order of how much they're worth:
 
