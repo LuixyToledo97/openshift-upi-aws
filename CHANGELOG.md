@@ -8,6 +8,15 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The orphaned `k8s-elb-*` security group was deleted on a single attempt, with
+  `ignore_errors` hiding the failure. It runs moments after the router ELB is
+  removed, and AWS releases what was attached to it on its own schedule, so
+  `DependencyViolation` is the normal first answer. The consequence surfaced
+  somewhere unrecognisable: Terraform cannot delete a VPC that still contains a
+  security group it doesn't manage, so `destroy` sat on "still destroying VPC
+  main" for twenty minutes with nothing connecting the two. It is now retried
+  for up to `ocplab_sg_teardown_timeout`, and if it still fails, says so and
+  explains that the VPC is about to stall because of it.
 - Closing the terminal killed a running `deploy`. The stdout callback wrote to
   `sys.stdout` unguarded, so once the terminal window was gone the first task
   to complete raised and took the whole playbook down — silently, mid-install,

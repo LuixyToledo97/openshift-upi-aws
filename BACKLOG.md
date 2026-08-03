@@ -34,3 +34,50 @@ the default `deploy` path.
   it better, or bring something external (Grafana, CloudWatch dashboards)?
 - Where does it run — inside the cluster (adds load to the very thing being
   monitored) or outside it?
+
+---
+
+## 🪞 A registry mirror, to stop paying for the same gigabytes every deploy
+
+**What**: a pull-through cache or mirror registry so the cluster's container
+images don't cross the NAT gateway from quay.io on every single deploy.
+
+**Why**: measured on the real bill, 2026-07-26 to 2026-08-03. This is the
+largest line item in the whole project, larger than all EC2 compute:
+
+```
+EU-NatGateway-Bytes      $8.85     ← ~197 GB processed
+Amazon EC2 - Compute     $6.17
+EU-EBS:VolumeUsage.gp3   $1.67
+EU-NatGateway-Hours      $1.44
+```
+
+Six deploys in that window, so roughly **$1.50 of data charges per deploy** —
+about 33 GB each, which is what six nodes each pulling their own copy of the
+OpenShift release payload costs. The images arrive from the internet, where
+inbound transfer is free; the charge is entirely the NAT gateway's per-GB
+processing ("Data processing charges apply for each gigabyte processed through
+the NAT gateway regardless of the traffic's source or destination").
+
+For short lab cycles this dominates. A one-hour deploy-test-destroy run costs
+roughly $1.06 of infrastructure and $1.50 of traffic — and it puts the Spot
+work in perspective, which saves ~$0.11/h of compute.
+
+**Open questions**:
+- Where does the mirror live? It only pays off if it survives between deploys,
+  which means persistent infrastructure that costs money of its own. An S3-backed
+  registry, a small always-on instance, something on the operator's own machine
+  reached over the tunnel?
+- OpenShift already supports this properly — `ImageContentSourcePolicy` /
+  `ImageDigestMirrorSet`, the mechanism behind disconnected installs, and
+  `oc adm release mirror`. Reuse that rather than inventing anything.
+- Does it belong in `deploy` at all, or is it an opt-in piece like
+  `safety-net`? Someone deploying once a month should not pay to maintain a cache.
+- Would deduplicating between the six nodes (rather than between deploys) be
+  simpler and get most of the benefit?
+
+**Explicitly rejected**: putting the nodes in the public subnet so image pulls
+go through the internet gateway, where inbound is free. It would remove the
+charge almost entirely and cost only ~$0.025/h in public IPs — but the private
+node topology is the thing this repository exists to reproduce, and `ocplab ssh`
+is built on it. Cheaper is not the only axis.

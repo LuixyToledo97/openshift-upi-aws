@@ -18,6 +18,12 @@ ROSA nor IPI.
 - 3 masters `m5.xlarge` + 2 workers `m5.large` + 1 temporary bootstrap
 - ~$1.06/hour on-demand while it's up in `eu-west-1` — see `ocplab cost`
   for a live, region-aware figure
+- **Plus ~$1.50 per deploy in NAT data processing**, measured on a real bill:
+  the six nodes each pull their own copy of the release payload from quay.io
+  through the NAT gateway, ~33 GB a time. It is the single biggest line item
+  in the project, larger than all EC2 compute, and `ocplab cost` cannot see
+  it — usage charges only appear afterwards. Don't quote the hourly figure as
+  the cost of a short cycle.
 
 ## Architecture
 

@@ -59,6 +59,14 @@ ocplab_elb_teardown_poll_interval: 10
 # still not enough, 'ocplab destroy' is idempotent and safe to re-run.
 ocplab_eni_teardown_timeout: 1200
 
+# The orphaned k8s-elb-* security group can't be deleted until AWS releases
+# whatever the router ELB still had attached to it, which does not happen the
+# instant the ELB disappears. Worth waiting for: Terraform cannot delete a VPC
+# that still contains a security group it doesn't manage, so giving up here
+# turns into a twenty-minute stall on the VPC with no visible cause.
+ocplab_sg_teardown_timeout: 600
+ocplab_sg_teardown_poll_interval: 15
+
 # Worker CSR approval: two rounds (client, then server), with a wait
 # between them so the kubelet has time to request the second CSR.
 ocplab_csr_approval_rounds: 2

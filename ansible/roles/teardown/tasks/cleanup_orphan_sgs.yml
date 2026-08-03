@@ -6,15 +6,50 @@
       vpc-id: "{{ teardown_vpc_id }}"
   register: teardown_sg_info
 
-# Only touch the ones Terraform does NOT manage. Its own are named
-# "{{ ocplab_cluster_name }}-*"; the orphaned security group from the
-# ingress-operator's router ELB is always k8s-elb-*.
+- name: Note the orphaned security groups
+  ansible.builtin.set_fact:
+    teardown_orphan_sgs: >-
+      {{ teardown_sg_info.security_groups | selectattr('group_name', 'match', '^k8s-elb-') | list }}
+
+# Retried, not attempted once. This runs moments after the router ELB goes
+# away, and AWS releases what was attached to it on its own schedule — so the
+# first DeleteSecurityGroup call routinely fails with DependencyViolation
+# ("resource ... has a dependent object").
+#
+# It used to be a single attempt with ignore_errors, which made that failure
+# invisible and pushed the consequence somewhere unrecognisable: Terraform
+# cannot delete a VPC that still contains a security group it doesn't manage,
+# so the destroy sat on "still destroying VPC main" for twenty minutes and then
+# gave up, with nothing in the output connecting the two. Seen on 2026-08-03.
 - name: Delete orphaned k8s-elb-* security groups
   amazon.aws.ec2_security_group:
     profile: "{{ ocplab_aws_profile }}"
     group_id: "{{ item.group_id }}"
     state: absent
-  loop: "{{ teardown_sg_info.security_groups | selectattr('group_name', 'match', '^k8s-elb-') | list }}"
+  loop: "{{ teardown_orphan_sgs }}"
   loop_control:
     label: "{{ item.group_name }} ({{ item.group_id }})"
+  register: teardown_sg_delete
+  until: teardown_sg_delete is success
+  retries: "{{ (ocplab_sg_teardown_timeout / ocplab_sg_teardown_poll_interval) | int }}"
+  delay: "{{ ocplab_sg_teardown_poll_interval }}"
   ignore_errors: true
+
+# Said out loud, because the alternative is Terraform stalling on the VPC with
+# no explanation. If this is reached, deleting the group by hand and re-running
+# 'ocplab destroy' is the fix — the role is idempotent.
+- name: Warn if a security group survived, since it will block the VPC
+  ansible.builtin.debug:
+    msg: >-
+      Could not delete
+      {{ teardown_sg_delete.results | default([]) | selectattr('failed', 'defined')
+         | selectattr('failed') | map(attribute='item.group_id') | join(', ') }}
+      after {{ ocplab_sg_teardown_timeout }}s. Terraform cannot delete a VPC that still
+      contains a security group it does not manage, so the destroy below will stall
+      on the VPC and eventually fail. Something is still attached to that group —
+      check with 'aws ec2 describe-network-interfaces --filters Name=group-id,Values=<id>'.
+      Once it frees up, delete the group and re-run 'ocplab destroy'; the role is
+      idempotent.
+  when: >-
+    teardown_sg_delete.results | default([]) | selectattr('failed', 'defined')
+    | selectattr('failed') | list | length > 0

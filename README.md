@@ -1287,6 +1287,40 @@ you if you forget.
 | S3 bucket (empty after destroy) | cents |
 | Killswitch Lambda (~30 invocations/month) | $0 — permanent free tier |
 
+### 🚚 The hourly rate is not the cost of a cycle
+
+Everything above is the **steady-state** cost of a running cluster. A
+deploy-test-destroy cycle carries a one-off charge on top, and it is not small.
+
+Measured on a real bill, 2026-07-26 to 2026-08-03 — the largest line item in
+the whole project turned out to be neither compute nor storage:
+
+| Line | |
+|---|---:|
+| NAT gateway **data processing** | **$8.85** |
+| EC2 compute | $6.17 |
+| EBS gp3 | $1.67 |
+| NAT gateway hours | $1.44 |
+
+That is ~197 GB across six deploys: **roughly 33 GB and $1.50 per deploy**,
+which is what six nodes each pulling their own copy of the OpenShift release
+payload from quay.io costs. The images themselves are free to receive — AWS
+does not charge for inbound data transfer — but a NAT gateway charges per GB
+"regardless of the traffic's source or destination", and the nodes are in a
+private subnet by design.
+
+So a one-hour cycle is closer to **$1.06 of infrastructure plus $1.50 of
+traffic** than to $1.06 total. For short, frequent labs, more than half the
+bill is images crossing the NAT.
+
+`ocplab cost` cannot see this — it prices the resources that exist right now,
+and this is a usage charge that only appears on the bill afterwards. The
+disclaimer at the bottom of its report ("excludes data transfer") is doing more
+work than it looks.
+
+A mirror or pull-through cache would remove most of it; it's in
+[BACKLOG.md](BACKLOG.md).
+
 ### 🪙 A cheaper profile — smaller nodes and Spot
 
 [`examples/minimal.yaml`](examples/minimal.yaml) is a ready-made
