@@ -202,6 +202,17 @@ Already fixed in the code — if something breaks, check here first:
      timeout. If `destroy` still fails on the orphaned `k8s-elb-*`
      security group after that, re-running `ocplab destroy` is safe — the
      role is idempotent and by then the ENIs are almost certainly free.
+   - **The `k8s-elb-*` security group is not held by an ENI, and waiting will
+     never free it.** Measured on 2026-08-03: zero network interfaces were
+     using it, and it still refused to delete after eleven minutes of retries.
+     AWS answers `DependencyViolation: has a dependent object` for a security
+     group that another group's **rules** reference — and the ingress-operator
+     adds exactly such a rule to the node security groups so the router ELB can
+     reach the nodes. That reference only clears when Terraform deletes the node
+     groups, which happens *after* the cleanup task, so retrying there could
+     never succeed. `cleanup_orphan_sgs.yml` revokes the referencing rules
+     first; the retry that remains is a safety net, not the mechanism. If this
+     is ever hit again, check for ENIs — the rule case is handled.
 
 Extra: the `ControlPlaneMachineSet` always stays `Degraded` in UPI (no
 `Machine` objects) and blocks `wait-for install-complete`. Handled with

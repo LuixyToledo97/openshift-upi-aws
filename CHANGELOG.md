@@ -8,8 +8,20 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- The orphaned `k8s-elb-*` security group was deleted on a single attempt, with
-  `ignore_errors` hiding the failure. It runs moments after the router ELB is
+- The orphaned `k8s-elb-*` security group could not be deleted, stalling
+  `destroy` on the VPC. It was first treated as a timing problem — one attempt
+  with `ignore_errors`, then retries — but retrying could never have worked:
+  measured on 2026-08-03, **zero** network interfaces were using the group and
+  eleven minutes of retries changed nothing. AWS reports
+  `DependencyViolation: has a dependent object` for a security group that
+  another group's *rules* reference, and the ingress-operator adds exactly such
+  a rule to the node security groups so the router ELB can reach the nodes.
+  That reference only clears when Terraform deletes the node groups, which
+  happens after the cleanup runs. `teardown` now revokes the referencing rules
+  first — safe, since those groups are seconds from being destroyed — and the
+  short retry that remains is a safety net rather than the strategy.
+
+  The original single attempt also hid the failure entirely. It runs moments after the router ELB is
   removed, and AWS releases what was attached to it on its own schedule, so
   `DependencyViolation` is the normal first answer. The consequence surfaced
   somewhere unrecognisable: Terraform cannot delete a VPC that still contains a
