@@ -72,6 +72,7 @@ All genuinely implemented (nothing is a stub):
 | `verify` | Live health check: API reachability (fast, bounded), `ClusterVersion`, node readiness, `ClusterOperators` |
 | `cost` | Approximate current USD/hour for whatever's actually deployed, power-state aware |
 | `console` | Prints the console URL and the `kubeadmin` password |
+| `env` | Prints `export KUBECONFIG=...` for this cluster, for `eval "$(ocplab env)"` |
 | `destroy` | Ordered teardown of the whole cluster |
 | `power on\|off\|status` | Graceful shutdown/restart, or a read-only power-state check — an alternative to `destroy`, **not** a cost-saving one (EBS/NAT/LBs keep billing while off) |
 | `ssh [node]` | Lists the running nodes, or opens a shell on one, through the EC2 Instance Connect Endpoint (nodes have no public IP) |
@@ -328,6 +329,38 @@ the project had before. Making it required would force every existing
   how you find the concrete version to write.
 - The RHCOS AMI is discovered from the installer binary itself, so pinning the
   version pins the node image too — one field controls both.
+
+## Which cluster `oc` points at
+
+Pinning the version solved half of "typing `oc` by hand does the right thing".
+The other half — *which cluster* — is the dangerous one: the failure isn't
+"not found", it's reaching a **different** cluster silently.
+
+`ocplab setup` appends a marked block to `.venv/bin/activate` that exports
+`KUBECONFIG`, and `ocplab env` prints the same line for `eval` in shells the
+hook can't reach. Four things about it are load-bearing:
+
+- **The hook and a wrapper script have identical coverage**, which is what
+  decided the design. `.venv/bin/oc` is only on `PATH` when the venv is
+  active — the very condition that fires the hook. With equal reach, the hook
+  wins because `echo $KUBECONFIG` then tells the truth; a wrapper would leave
+  the standard diagnostic answering "unset" while `oc` talked to the lab,
+  reintroducing the invisibility this exists to remove.
+- **`_OCPLAB_KUBECONFIG` is what makes re-sourcing `activate` safe**, and it
+  is not decoration. The second pass redefines `deactivate` from scratch,
+  destroying the wrapper, and would then skip the block because `KUBECONFIG`
+  is already set — leaving it exported with nothing left to undo it. "We set
+  it" has to count as "not set".
+- **The restore wraps the venv's own `deactivate`** by renaming it with
+  `typeset -f | sed` on the *first line only*, which preserves each shell's
+  brace layout (bash puts `{` on line 2, zsh on line 1). That part is bash/zsh
+  only and deliberately optional — the guard degrades to "KUBECONFIG outlives
+  the deactivate", never to a broken activation. The `export` itself cannot
+  fail, which is the point.
+- **It exports the path even when `install-dir` doesn't exist.** Gating on
+  existence would silently fall back to `~/.kube/config` for any shell
+  activated before the first deploy — exactly the bug. `oc` failing with
+  `localhost:8080 refused` is the safe direction, and README §10 names it.
 - **README §2.1.1 is the tested-versions table, and it is a factual record,
   not a compatibility claim.** A row only goes in after a real end-to-end run
   against AWS: deploy → verify with every node Ready and every ClusterOperator

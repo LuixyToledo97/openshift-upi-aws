@@ -92,29 +92,3 @@ go through the internet gateway, where inbound is free. It would remove the
 charge almost entirely and cost only ~$0.025/h in public IPs — but the private
 node topology is the thing this repository exists to reproduce, and `ocplab ssh`
 is built on it. Cheaper is not the only axis.
-
----
-
-## 🎯 `oc` points at the wrong cluster, not just the wrong version
-
-**What**: after `ocplab deploy`, typing `oc get nodes` by hand talks to
-whatever `~/.kube/config` has as its current context — for Luis on 2026-08-03,
-a leftover Docker Desktop cluster. The cluster's kubeconfig is at
-`install-dir/auth/kubeconfig`, and only ocplab knows that: every role passes it
-explicitly, so the tooling works while the human's shell doesn't.
-
-**Why it matters**: we solved half of this already. `openshift.version` links
-`oc` into `.venv/bin` so the *version* matches the cluster. The *cluster* it
-points at was left unsolved, and that half is the more dangerous one — the
-failure isn't "can't find the cluster", it's connecting to a **different**
-cluster in silence. An `oc delete` in that state goes somewhere unintended.
-
-**Options, none decided**:
-- Document it and stop there — `export KUBECONFIG=$PWD/install-dir/auth/kubeconfig`.
-- Have `ocplab console` print the export line beside the URL and password.
-- Have `ocplab setup` append the export to `.venv/bin/activate`, with a matching
-  restore in `deactivate`. Best result, most invasive: it changes KUBECONFIG for
-  everything in that shell, not just ocplab.
-
-The venv already has to be activated for ocplab to work at all, which is what
-makes the third option tempting and also what makes it presumptuous.

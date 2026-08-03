@@ -6,6 +6,34 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `oc` and `kubectl` now point at **this** cluster, not just at the matching
+  client version. Activating the venv exports `KUBECONFIG`, and `deactivate`
+  puts it back.
+
+  Pinning `openshift.version` had solved which *binary* you get; which
+  *cluster* it talked to was still whatever `~/.kube/config` had as its current
+  context — for one of us, a leftover Docker Desktop. That is the worse half:
+  the failure is not "cluster not found", it is reaching a different cluster in
+  silence, and a hand-typed `oc delete` in that state lands somewhere it was
+  never meant to.
+
+  `ocplab setup` adds a clearly marked block to `.venv/bin/activate`. It never
+  overrides a `KUBECONFIG` you set yourself, and it exports the path even
+  before `install-dir` exists — pointing at a file that isn't there makes `oc`
+  fail loudly, which beats quietly using the context this exists to avoid.
+  Deleting the block opts out. **An existing venv needs `ocplab setup` run once
+  to pick this up**; nothing is rebuilt.
+
+- `ocplab env`, which prints `export KUBECONFIG=...` for `eval "$(ocplab
+  env)"` — for the shells the activate hook can't reach: one where the venv was
+  never activated, a script, or a venv created before the hook existed. Only
+  the export goes to stdout, so it is always safe to eval.
+
+- `ocplab status` now reports which cluster your shell points at, beside the
+  version it runs, and `ocplab console` says so when you're not on this one.
+
 ### Fixed
 
 - `cost` priced Spot instances at their on-demand rate. Measured on 2026-08-03

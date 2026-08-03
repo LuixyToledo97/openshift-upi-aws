@@ -31,6 +31,7 @@ TERRAFORM_DIR = REPO_ROOT / "terraform"
 ANSIBLE_DIR = REPO_ROOT / "ansible"
 PLAYBOOKS_DIR = ANSIBLE_DIR / "playbooks"
 INSTALL_DIR = REPO_ROOT / "install-dir"
+KUBECONFIG_PATH = INSTALL_DIR / "auth" / "kubeconfig"
 LOGS_DIR = REPO_ROOT / "logs"
 # The cluster.yaml templates 'ocplab init' writes. Files, not embedded strings:
 # a config template is data, the whole repository is required to run anything
@@ -600,6 +601,91 @@ def unlink_managed_binaries():
     return removed
 
 
+_KUBECONFIG_HOOK_START = "# >>> ocplab kubeconfig >>>"
+_KUBECONFIG_HOOK_END = "# <<< ocplab kubeconfig <<<"
+
+
+def kubeconfig_hook_block():
+    """The block 'ocplab setup' appends to .venv/bin/activate.
+
+    Pinning the binary was only half the problem: `oc` in an ocplab shell was
+    already ours (see link_managed_binaries), but where it pointed was still
+    whatever ~/.kube/config had as its current context. That is the more
+    dangerous half — the failure isn't 'cluster not found', it's talking to a
+    *different* cluster in silence, which is how a hand-typed `oc delete` ends
+    up somewhere it was never meant to go.
+
+    Two deliberate constraints:
+
+    - It only sets KUBECONFIG when the caller hasn't. An explicit value is
+      always the user's, never ours to override.
+    - It exports the path whether or not install-dir exists yet. A shell that
+      activated before the first deploy would otherwise silently fall back to
+      the very context this exists to avoid; pointing at a not-yet-created
+      kubeconfig fails loudly instead, which is the safe direction.
+
+    Restoring on deactivate needs the venv's own function renamed, so that part
+    is bash/zsh only and entirely optional: if it doesn't take, KUBECONFIG
+    outlives the deactivate and nothing else changes. The export itself cannot
+    fail, which keeps a broken hook from ever breaking activation.
+    """
+    return f"""
+{_KUBECONFIG_HOOK_START}
+# Added by 'ocplab setup'. Points oc/kubectl at THIS cluster while the venv is
+# active, so a hand-typed command can't land on whatever context ~/.kube/config
+# happens to have. Delete this block to opt out; 'ocplab env' does the same
+# thing on demand.
+# The marker is what makes re-sourcing activate safe. The second pass redefines
+# deactivate from scratch, destroying the wrapper below, and would then skip
+# this block entirely because KUBECONFIG is already set — leaving it exported
+# with nothing left to undo it. 'we set it' has to count as 'not set'.
+if [ -z "${{KUBECONFIG:-}}" ] || [ -n "${{_OCPLAB_KUBECONFIG:-}}" ]; then
+    _OCPLAB_KUBECONFIG=1
+    export KUBECONFIG="{KUBECONFIG_PATH}"
+    if [ -n "${{BASH_VERSION:-}}${{ZSH_VERSION:-}}" ]; then
+        # Rename the venv's own deactivate and wrap it, so leaving the venv also
+        # leaves the cluster. The sed rewrites only the name on the first line,
+        # which keeps each shell's own brace layout intact.
+        eval "$(typeset -f deactivate | sed '1s/deactivate/_ocplab_venv_deactivate/')" 2>/dev/null
+        if typeset -f _ocplab_venv_deactivate >/dev/null 2>&1; then
+            deactivate() {{
+                unset KUBECONFIG
+                unset _OCPLAB_KUBECONFIG
+                _ocplab_venv_deactivate "$@"
+            }}
+        fi
+    fi
+fi
+{_KUBECONFIG_HOOK_END}
+"""
+
+
+def install_kubeconfig_hook():
+    """Add (or refresh) the KUBECONFIG block in .venv/bin/activate.
+
+    Rewritten rather than appended-to when already present, so a checkout that
+    moves — or a hook from an older version — converges instead of accumulating
+    blocks. Best-effort: `setup` has already done the part that matters by the
+    time this runs, and failing to write a convenience hook must not fail it.
+    """
+    activate = REPO_ROOT / ".venv" / "bin" / "activate"
+    if not activate.is_file():
+        return None
+    try:
+        current = activate.read_text()
+        if _KUBECONFIG_HOOK_START in current and _KUBECONFIG_HOOK_END in current:
+            head = current[: current.index(_KUBECONFIG_HOOK_START)].rstrip("\n")
+            tail = current[current.index(_KUBECONFIG_HOOK_END) + len(_KUBECONFIG_HOOK_END):]
+            updated = head + "\n\n" + kubeconfig_hook_block().strip("\n") + "\n" + tail.lstrip("\n")
+        else:
+            updated = current.rstrip("\n") + "\n" + kubeconfig_hook_block()
+        if updated != current:
+            activate.write_text(updated)
+        return activate
+    except OSError:
+        return None
+
+
 def resolve_binaries(cfg):
     """Absolute paths to openshift-install and oc, or the bare names.
 
@@ -996,9 +1082,14 @@ def cmd_setup(args):
     except (subprocess.CalledProcessError, OSError) as exc:
         die(f"failed installing the environment ({exc}). Check the output above.")
 
+    install_kubeconfig_hook()
+
     print()
     print("Done. Before using commands that call Ansible (bootstrap, preflight, deploy...):")
     print("  source .venv/bin/activate")
+    print()
+    print("That also points oc/kubectl at this cluster (KUBECONFIG), unless you've set")
+    print("KUBECONFIG yourself, and undoes it on 'deactivate'.")
 
 
 def cmd_validate(args):
@@ -1437,6 +1528,16 @@ def cmd_status(args):
         listed = ", ".join(v["version"] for v in cached)
         print(f"binary cache: {listed} ({human_size(total)} in {BIN_CACHE})")
 
+    # The version behind `oc` is reported two lines up; where it points is the
+    # half that can silently be another cluster, so it belongs here too.
+    shell_kubeconfig = os.environ.get("KUBECONFIG")
+    if shell_kubeconfig == str(KUBECONFIG_PATH):
+        print("KUBECONFIG: this cluster")
+    elif shell_kubeconfig:
+        print(f"KUBECONFIG: {shell_kubeconfig} — NOT this cluster")
+    else:
+        print("KUBECONFIG: unset — oc uses ~/.kube/config, which is NOT this cluster")
+
     meta_file = INSTALL_DIR / "metadata.json"
     if meta_file.exists():
         infra_id = json.loads(meta_file.read_text()).get("infraID", "?")
@@ -1469,6 +1570,30 @@ def cmd_console(args):
         print(f"Password: {pw_file.read_text().strip()}")
     else:
         print(f"Password: not available yet ({pw_file} does not exist)")
+
+    # Printed here because this is the moment someone is about to work against
+    # the cluster by hand, which is exactly when pointing at the wrong one hurts.
+    if os.environ.get("KUBECONFIG") != str(KUBECONFIG_PATH):
+        print()
+        print("Your shell is NOT pointing at this cluster's kubeconfig. To fix it:")
+        print('  eval "$(ocplab env)"')
+
+
+def cmd_env(args):
+    """Print the shell settings for this cluster, for `eval "$(ocplab env)"`.
+
+    Exists for the shells the activate hook can't reach: one where the venv was
+    never activated, a non-interactive script, or a venv created before the hook
+    existed. Everything informational goes to stderr so the stdout half stays
+    safe to eval.
+    """
+    if not KUBECONFIG_PATH.exists():
+        print(
+            f"Warning: {KUBECONFIG_PATH} does not exist yet — run 'ocplab deploy' first.\n"
+            "  Exporting it anyway: oc will fail loudly rather than quietly using another cluster.",
+            file=sys.stderr,
+        )
+    print(f'export KUBECONFIG="{KUBECONFIG_PATH}"')
 
 
 # --------------------------------------------------------------------------
@@ -1623,6 +1748,23 @@ def build_parser():
 
     p = subparsers.add_parser("console", parents=[sub_global_parser], help="print the console URL and the kubeadmin password")
     p.set_defaults(func=cmd_console)
+
+    p = subparsers.add_parser(
+        "env", parents=[sub_global_parser],
+        help="print the shell settings for this cluster (use with eval)",
+        description=(
+            "Prints 'export KUBECONFIG=...' for this cluster, so oc and kubectl talk "
+            "to it instead of whatever context ~/.kube/config currently has:\n\n"
+            "  eval \"$(ocplab env)\"\n\n"
+            "'ocplab setup' already does this for you whenever you activate the venv; "
+            "this command is for the shells that hook cannot reach — one where the "
+            "venv was never activated, a script, or a venv created before the hook "
+            "existed. Nothing but the export goes to stdout, so it is always safe to "
+            "eval."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.set_defaults(func=cmd_env)
 
     p = subparsers.add_parser(
         "repair", parents=[sub_global_parser],

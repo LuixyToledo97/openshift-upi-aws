@@ -656,6 +656,7 @@ verification — lives in the Ansible roles listed above.
 | `ocplab verify` | Live cluster health: `ClusterVersion`, node readiness, `ClusterOperators` | No |
 | `ocplab cost` | Approximate current USD/hour cost of what's actually deployed | No |
 | `ocplab console` | Prints the console URL and the `kubeadmin` password | No |
+| `ocplab env` | Prints `export KUBECONFIG=...` for this cluster, to `eval` | No |
 | `ocplab ssh [node]` | Lists the running nodes, or opens a shell on one | No |
 | `ocplab repair` | Recreates a worker that disappeared, on a running cluster | No |
 | `ocplab versions list\|download\|rm` | Manages the cached OpenShift binaries | No |
@@ -678,6 +679,51 @@ behind and answer confidently about a config you no longer have. The
 `render` command itself is the exception to the exception: there the
 generated files *are* the subject of the command, so `ocplab render
 --dry-run -v` shows the diff and writes nothing.
+
+### 🎯 Which cluster `oc` talks to
+
+Pinning `openshift.version` makes `oc` the *right version*. It says nothing
+about *which cluster* it points at — that's whatever `~/.kube/config` has as
+its current context, quite possibly a leftover Docker Desktop or minikube. And
+that is the more dangerous half: the failure isn't "cluster not found", it's
+reaching a **different** cluster in silence. An `oc delete` in that state goes
+somewhere you didn't intend.
+
+So activating the venv also points `KUBECONFIG` at this cluster:
+
+```bash
+source .venv/bin/activate
+oc config current-context     # admin  — this cluster
+deactivate
+oc config current-context     # docker-desktop  — back to whatever you had
+```
+
+`ocplab setup` adds a clearly marked block to `.venv/bin/activate` to do this,
+and `deactivate` undoes it. Two rules it follows:
+
+- **It never overrides a `KUBECONFIG` you set yourself.** An explicit value is
+  yours; the hook only fills in a blank.
+- **It exports the path even before the cluster exists.** `install-dir` isn't
+  there until the first deploy, and pointing at a file that isn't there makes
+  `oc` fail loudly — much better than quietly falling back to the very context
+  this exists to avoid.
+
+Deleting that block opts out permanently. Restoring on `deactivate` needs the
+venv's own shell function rewritten, so that part is bash/zsh only; in another
+shell `KUBECONFIG` simply outlives the `deactivate`, and nothing else changes.
+
+For a shell where you never activated the venv — a script, or a terminal you
+opened for one command — there's `ocplab env`:
+
+```bash
+eval "$(ocplab env)"
+```
+
+`ocplab status` reports where your current shell points, next to which version
+it's running, and `ocplab console` says so too if you're not on this cluster.
+
+> If you created the venv before this existed, run `ocplab setup` once to add
+> the block. It won't rebuild anything.
 
 ### 📝 `cluster.yaml`
 
@@ -789,7 +835,7 @@ Three critical things:
 
 - **`kubernetes.io/cluster/<infraID> = owned`** — without this tag
   `aws-cloud-controller-manager` won't start and **the cluster never
-  completes** (see [10.1](#101--the-kubernetesiocluster-tag--main-root-cause)).
+  completes** (see [10.1](#101--the-kubernetesioclusterinfraid-tag--main-root-cause)).
 - **`infra_id` is read from `metadata.json`**, never typed by hand: the
   installer generates a different random suffix (`ocp4lab-rz2zm`,
   `ocp4lab-qbxhm`...) every time the Ignition configs are regenerated.
@@ -1024,11 +1070,15 @@ just a theoretical option.
 ```bash
 ./ocplab console          # prints the console URL and the kubeadmin password
 ./ocplab verify            # wraps the three checks below, exits non-zero if unhealthy
-export KUBECONFIG=~/openshift-upi-aws/install-dir/auth/kubeconfig
 oc get clusterversion     # Cluster version is 4.22.x
 oc get nodes              # 5 Ready
 oc get co                 # all True / False / False
 ```
+
+Those `oc` commands need no `export`: activating the venv already points
+`KUBECONFIG` at this cluster — see [Which cluster `oc` talks
+to](#-which-cluster-oc-talks-to). In a shell where you didn't activate it,
+`eval "$(ocplab env)"`.
 
 `ocplab verify` fails fast (in seconds, not indefinitely) if the API
 isn't reachable at all — e.g. the cluster is powered off
@@ -1616,12 +1666,25 @@ something earlier in your `PATH` is shadowing the venv's.
 
 #### 🔍 `oc` responds with `nodes "..." not found` or `No resources found`
 
-That terminal doesn't have `KUBECONFIG` exported and points to a
-different context:
+That terminal is talking to a **different cluster** — usually a leftover
+Docker Desktop or minikube context in `~/.kube/config`. Check with
+`ocplab status`, which reports where your shell points, or:
 
 ```bash
-export KUBECONFIG=~/openshift-upi-aws/install-dir/auth/kubeconfig
+eval "$(ocplab env)"
 ```
+
+Activating the venv normally does this for you (see [Which cluster `oc` talks
+to](#-which-cluster-oc-talks-to)). If it didn't, either you have `KUBECONFIG`
+set to something else — which ocplab deliberately never overrides — or the
+venv predates that behaviour, in which case run `ocplab setup` once.
+
+#### 🔍 `oc` responds with `connection to the server localhost:8080 was refused`
+
+The opposite problem, and a much safer one: `KUBECONFIG` points at this
+cluster's kubeconfig, but `install-dir/auth/kubeconfig` doesn't exist yet. The
+cluster hasn't been deployed (or `install-dir` was archived). Run
+`ocplab deploy`, or `ocplab status` to see what state `install-dir` is in.
 
 #### 🔑 `Permission denied (publickey)` when hopping from the bootstrap to a master
 
@@ -1717,7 +1780,8 @@ cd ~/openshift-upi-aws
 
 ```bash
 ./ocplab console          # console URL + kubeadmin password
-./ocplab status           # install-dir age, Terraform resource count
+./ocplab status           # install-dir age, Terraform resource count, where oc points
+eval "$(./ocplab env)"     # point this shell's oc/kubectl at the cluster
 jq -r .infraID install-dir/metadata.json
 ```
 
