@@ -56,6 +56,7 @@
   --accent-bg:  #eeecfe;
   --accent-fg:  #ffffff;
 
+  --info:    #0e7490;  --info-bg:   #e0f4f9;
   --ok:      #0f7a52;  --ok-bg:     #e3f7ed;
   --warn:    #8a5a00;  --warn-bg:   #fdf1dd;
   --danger:  #bf2f3f;  --danger-bg: #fdeaec;
@@ -90,6 +91,7 @@
     --accent-bg:  #1e1b3d;
     --accent-fg:  #0b0c12;
 
+    --info:    #4cc4e0;  --info-bg:   #10262d;
     --ok:      #4bd598;  --ok-bg:     #102a20;
     --warn:    #ecb457;  --warn-bg:   #2c2213;
     --danger:  #ff7b85;  --danger-bg: #301419;
