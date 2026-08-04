@@ -269,12 +269,15 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 
 /* ── blocks ────────────────────────────────────────────────── */
 
-.scrollbox { max-height: 264px; overflow-y: auto; overscroll-behavior: contain; }
+/* Sized to three runs: one more and the block outgrew its neighbour, which
+   then stretched to match and left Live state half empty. The clipped fourth
+   row is deliberate — it is what tells you there is more to scroll. */
+.scrollbox { max-height: 11.6rem; overflow-y: auto; overscroll-behavior: contain; }
 .scrollbox.tall { max-height: min(60vh, 620px); }
 
 .split { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
 .split > .block { display: flex; flex-direction: column; }
-.split > .block > .scrollbox { flex: 1; }
+
 .block {
   background: var(--raised); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 1.15rem; box-shadow: var(--shadow);
