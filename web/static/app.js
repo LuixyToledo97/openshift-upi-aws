@@ -394,7 +394,9 @@ function renderLiveActions() {
   for (const id of LIVE) {
     const command = state.commands.find((c) => c.id === id);
     if (!command) continue;
-    const btn = el("button", "btn btn-sm", command.label);
+    // No btn-sm: `.chiprow .btn` sets their size, and carrying both left the
+    // outcome resting on specificity for no reason.
+    const btn = el("button", "btn", command.label);
     btn.title = command.desc;
     btn.addEventListener("click", () => run(command));
     host.append(btn);

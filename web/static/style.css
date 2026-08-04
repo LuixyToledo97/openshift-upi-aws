@@ -274,7 +274,7 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 
 .split { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
 .split > .block { display: flex; flex-direction: column; }
-.split > .block > .scrollbox, .split > .block > .chiprow:last-child { flex: 1; }
+.split > .block > .scrollbox { flex: 1; }
 .block {
   background: var(--raised); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 1.15rem; box-shadow: var(--shadow);
@@ -283,7 +283,15 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 .block-head h3 { font-size: 1rem; }
 .block-head p { color: var(--muted); font-size: .8rem; margin-top: .15rem; }
 
-.chiprow { display: flex; flex-wrap: wrap; gap: .4rem; }
+/* Two by two at their natural height. They used to be a flex row set to fill
+   the block, which stretched four buttons into four tall panels. */
+.chiprow {
+  display: grid; gap: .55rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+}
+.chiprow .btn { min-height: 2.4rem; font-size: .86rem; padding: .5rem .8rem; }
+@media (max-width: 480px) { .chiprow { grid-template-columns: 1fr; } }
 
 .runline {
   display: flex; align-items: center; justify-content: space-between;
