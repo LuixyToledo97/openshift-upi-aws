@@ -207,6 +207,20 @@ Already fixed in the code — if something breaks, check here first:
      timeout. If `destroy` still fails on the orphaned `k8s-elb-*`
      security group after that, re-running `ocplab destroy` is safe — the
      role is idempotent and by then the ENIs are almost certainly free.
+   - **Scaling the ingress-operator to zero also stops the ELB from deleting
+     itself, so the poll that waits for it can only ever time out.** Measured
+     on 2026-08-04: the poll ran all thirty attempts — **364s, half of a
+     12m10s destroy** — and the manual-delete fallback then removed the ELB in
+     26s. The operator is what deletes the router Service, and the Service is
+     what the cloud-controller-manager watches; with it stopped there is
+     nothing left to tear the ELB down on its own. The timeout is now 60s
+     rather than 300s, which keeps the poll as a check without paying six
+     minutes for an outcome that cannot happen. Deleting the router Service
+     explicitly is the real fix and is in `BACKLOG.md`.
+   - **Deleting the ELB explicitly releases its ENIs almost immediately.** The
+     20-minute `ocplab_eni_teardown_timeout` exists for ENIs left to expire on
+     their own (35+ minutes, measured); in the 2026-08-04 run, where the ELB
+     was deleted by hand, the wait was satisfied in **4 seconds**.
    - **The `k8s-elb-*` security group is not held by an ENI, and waiting will
      never free it.** Measured on 2026-08-03: zero network interfaces were
      using it, and it still refused to delete after eleven minutes of retries.

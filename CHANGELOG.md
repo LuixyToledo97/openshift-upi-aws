@@ -182,7 +182,27 @@ uses [Semantic Versioning](https://semver.org/).
   Today that is exactly one version, which is the point of writing it down.
 
 
+### Changed
+
+- `destroy` no longer spends five minutes waiting for the router ELB to delete
+  itself. Measured on a real teardown: the poll ran all thirty attempts (364s,
+  half of a 12m10s destroy) and the manual-delete fallback then removed it in
+  26s. That is structural rather than unlucky — the ingress-operator is scaled
+  to zero so it cannot recreate the ELB, and it is also what deletes the router
+  Service the cloud-controller-manager watches, so nothing is left to tear the
+  ELB down on its own. The timeout drops from 300s to 60s, which keeps the poll
+  as a check without paying for an outcome that cannot arrive. Deleting the
+  router Service explicitly is the proper fix and is in `BACKLOG.md`.
+
 ### Fixed
+
+- Long `until`/`retries` waits produced no output at all when nothing was
+  attached to a terminal. Each attempt went to the log file only, and the
+  in-place "⋯ attempt n/m" line is a no-op without a TTY — so a `destroy`
+  watched from the web UI, or any redirected run, sat silent for the six
+  minutes it polls the router ELB and potentially twenty more on its ENIs,
+  looking hung while working normally. Piped runs now get one line per
+  attempt; terminals and the log file are unchanged.
 
 - `cost` priced Spot instances at their on-demand rate. Measured on 2026-08-03
   against a live minimal-profile cluster, it reported **$0.9213/h** against a

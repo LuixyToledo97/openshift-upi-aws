@@ -49,7 +49,22 @@ ocplab_openshift_version: ""
 ocplab_bootstrap_wait_attempts: 3
 
 # Wait times (seconds), aligned with scripts/teardown.sh.
-ocplab_elb_teardown_timeout: 300
+#
+# Cut from 300 to 60 on 2026-08-04, after measuring a real destroy: the poll
+# exhausted all thirty attempts (364s) and the ELB was then removed by the
+# manual-delete fallback in 26s. That is not bad luck, it is structural —
+# `delete_ingresscontroller.yml` scales the ingress-operator to zero so it
+# cannot recreate the ELB, and the operator is also what would have deleted
+# the router Service that the cloud-controller-manager watches. Nothing is
+# left to tear the ELB down on its own, so the poll can only ever time out.
+#
+# It is kept at 60s rather than removed because the poll is also what proves
+# the ELB is gone before the ENI wait, and because a future OpenShift version
+# could start cleaning up on its own — six attempts would notice that; zero
+# would not. The real fix is deleting the router Service too, so the CCM does
+# an orderly teardown; that is in BACKLOG.md, since it needs its own live run
+# to validate.
+ocplab_elb_teardown_timeout: 60
 ocplab_elb_teardown_poll_interval: 10
 # The Classic router ELB disappears from the AWS API almost immediately
 # (see ocplab_elb_teardown_timeout above), but AWS releases its
@@ -57,6 +72,8 @@ ocplab_elb_teardown_poll_interval: 10
 # longer, looser timeline — found running this for real, where it took
 # over 35 minutes. 1200s (20min) is a generous bound for that; if it's
 # still not enough, 'ocplab destroy' is idempotent and safe to re-run.
+# In the 2026-08-04 run it was satisfied in 4s, because deleting the ELB
+# explicitly releases them far more promptly than waiting one out does.
 ocplab_eni_teardown_timeout: 1200
 
 # A safety net for deleting the orphaned k8s-elb-* security group, not the

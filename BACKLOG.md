@@ -151,3 +151,43 @@ go through the internet gateway, where inbound is free. It would remove the
 charge almost entirely and cost only ~$0.025/h in public IPs — but the private
 node topology is the thing this repository exists to reproduce, and `ocplab ssh`
 is built on it. Cheaper is not the only axis.
+
+---
+
+## 🧹 Delete the router Service too, so the CCM tears the ELB down properly
+
+**What**: `delete_ingresscontroller.yml` deletes the `IngressController` and
+scales the ingress-operator to zero. Add the `router-default` Service in
+`openshift-ingress` to that, so the cloud-controller-manager performs an
+orderly load balancer teardown instead of the teardown deleting the ELB by
+hand afterwards.
+
+**Why**: measured on a real destroy, 2026-08-04. The ELB poll ran its full
+thirty attempts — **364 seconds, exactly half of the 12m10s destroy** — and
+then the manual-delete fallback removed it in 26s.
+
+That is structural, not bad luck. The operator is scaled to zero so it cannot
+*recreate* the ELB (trap #4), but the operator is also what deletes the router
+Service, and the Service is what the CCM watches. With it stopped, nothing is
+left to tear the ELB down on its own, so the poll can only ever time out. The
+timeout has been cut to 60s as an interim fix, which recovers five of those
+six minutes.
+
+Deleting the Service explicitly should make the CCM do the whole job:
+de-register the instances, delete the ELB, release the ENIs, and remove the
+security-group rules it added — possibly making `cleanup_orphan_sgs.yml`
+unnecessary as well.
+
+**Open questions**:
+- Does deleting the Service while the ingress-operator is down actually reach
+  the CCM, or does the `service.kubernetes.io/load-balancer-cleanup` finalizer
+  need something that is also stopped? The CVO is at zero too by then.
+- If the CCM does the cleanup, does the `k8s-elb-*` security group still get
+  orphaned? If not, `cleanup_orphan_sgs.yml` becomes a safety net rather than
+  a step — worth keeping either way, but worth knowing.
+- Order matters: the Service has to go before the masters are terminated, or
+  there is no CCM left to act on it.
+
+**Needs a live run to validate.** It changes the one path whose failure mode
+is a `DependencyViolation` that strands a VPC, so it is not a change to make
+on reasoning alone.
