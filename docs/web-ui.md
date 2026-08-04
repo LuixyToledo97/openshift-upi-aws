@@ -41,11 +41,60 @@ AWS and never reads Terraform state — it runs `ocplab <command>` as a
 subprocess and shows you that command's own output. Whatever the CLI does, the
 UI does, because it *is* the CLI.
 
-Six views: **Overview** (status cards, live-state buttons, recent runs),
-**Actions** — grouped by how much damage each can do, and tinted to match —
-**Configuration** (the `cluster.yaml` editor), **Runs**, filterable by
-read-only versus changed-something and kept across restarts, **Help** with the
-workflows written out, and **About**.
+## The six views
+
+### Overview
+
+![The Overview tab](assets/screenshots/overview.png)
+
+What version is pinned and whether it is downloaded, what Terraform holds, how
+old `install-dir` is, and — only when it points somewhere else — where your
+`oc` is aimed. Nothing on this page needs a command run first: it is all local
+and instant, which is what makes it safe to poll. Live state sits behind the
+four buttons, because each of those costs a round trip to AWS.
+
+### Actions
+
+![The Actions tab](assets/screenshots/actions.png)
+
+Grouped by how much damage each one can do, and tinted to match: red destroys,
+amber changes something you may not get back, green restores. Descriptions fold
+away behind the chevron so the page stays scannable — and the chevron is a
+separate control from the row that runs the command, because one button that
+both explains and fires is a button people hesitate over.
+
+### Configuration
+
+![The Configuration tab](assets/screenshots/configuration.png)
+
+The `cluster.yaml` editor. **Validate runs against what is in the editor, not
+the saved file**, so a config can be checked before it overwrites a working
+one — and it reports every error at once rather than stopping at the first.
+Saving keeps the previous contents in `cluster.yaml.bak`.
+
+### Runs
+
+![The Runs tab](assets/screenshots/runs.png)
+
+Filterable by whether an operation was read-only or actually changed something.
+Kept across restarts of the server: the metadata lives in `logs/runs.json`, and
+a run recorded by an earlier server replays from its own log file rather than
+from lines nobody kept.
+
+### Help
+
+![The Help tab](assets/screenshots/help.png)
+
+The workflows written out — first run, deploy, day to day, and stopping the
+bill — each step naming both the action and the CLI command, since neither is
+the real one.
+
+### About
+
+![The About tab](assets/screenshots/about.png)
+
+The version, read from `ocplab --version` rather than hardcoded so the two
+cannot drift, the licence, and the author's links.
 
 The output panel appears when you run something, docks to the bottom or the
 right, and is drag-resizable; it reserves space rather than covering the page,

@@ -28,6 +28,10 @@ It has **two front ends over one engine**:
 Neither is the real one. The UI runs no logic of its own: it executes the same
 commands as subprocesses.
 
+<div align="center">
+  <img src="docs/assets/screenshots/overview.png" alt="The ocplab web UI, Overview tab" width="100%">
+</div>
+
 > [!WARNING]
 > **This lab costs money while it runs.** Roughly **$0.83–1.06/hour** with
 > everything up, plus **$1.12–1.58 of data transfer per deploy** — which for a
