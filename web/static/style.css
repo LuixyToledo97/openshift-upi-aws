@@ -1,0 +1,240 @@
+/* ocplab web UI — no build step, no framework, no external requests.
+   Colours are declared for both schemes because a terminal-adjacent tool that
+   only works in one of them is annoying in exactly the environment it is used. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eceef2;
+  --border: #d7dae0;
+  --text: #1b1e23;
+  --muted: #61666f;
+  --accent: #2563eb;
+  --accent-text: #ffffff;
+  --danger: #c62828;
+  --ok: #1b7f3b;
+  --warn: #b26a00;
+  --console-bg: #14161a;
+  --console-text: #d7dbe0;
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101216;
+    --surface: #171a1f;
+    --surface-2: #1e222a;
+    --border: #2b303a;
+    --text: #e6e8ec;
+    --muted: #949aa5;
+    --accent: #4f83f1;
+    --danger: #ef5350;
+    --ok: #4caf7d;
+    --warn: #e0a33a;
+    --console-bg: #0b0d10;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- top bar --- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.brand { display: flex; align-items: center; gap: .6rem; min-height: 52px; }
+.brand h1 { font-size: 1rem; font-weight: 650; margin: 0; letter-spacing: .01em; }
+.repo { color: var(--muted); font-family: var(--mono); font-size: .74rem; }
+
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted); flex: none;
+}
+.dot.is-running { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.dot.is-ok { background: var(--ok); }
+.dot.is-fail { background: var(--danger); }
+@keyframes pulse { 50% { opacity: .25; } }
+
+.tabs { display: flex; gap: .15rem; }
+.tab {
+  border: 0; background: none; color: var(--muted);
+  font: inherit; font-weight: 550; cursor: pointer;
+  padding: .55rem .8rem; border-radius: 8px 8px 0 0;
+  border-bottom: 2px solid transparent;
+}
+.tab:hover { color: var(--text); background: var(--surface-2); }
+.tab.is-active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* --- panels --- */
+
+main { flex: 1; min-height: 0; }
+.panel { display: none; height: 100%; min-height: 0; }
+.panel.is-active { display: flex; }
+
+/* --- operations --- */
+
+.sidebar {
+  width: 268px; flex: none;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: .9rem;
+}
+
+.dryrun {
+  display: flex; gap: .5rem; align-items: flex-start;
+  padding: .6rem .7rem; margin-bottom: .9rem;
+  background: var(--surface-2); border-radius: var(--radius);
+  cursor: pointer; font-weight: 550;
+}
+.dryrun em { display: block; font-style: normal; font-weight: 400; color: var(--muted); font-size: .78rem; }
+
+.group { margin-bottom: 1.1rem; }
+.group h3 {
+  font-size: .7rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); margin: 0 0 .45rem .2rem;
+}
+
+.cmd {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 1px solid transparent; border-radius: 8px;
+  padding: .5rem .6rem; margin-bottom: .15rem;
+  font: inherit; color: var(--text); cursor: pointer;
+}
+.cmd:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border); }
+.cmd:disabled { opacity: .45; cursor: not-allowed; }
+.cmd strong { display: block; font-weight: 570; }
+.cmd span { display: block; color: var(--muted); font-size: .76rem; }
+.cmd.is-danger strong { color: var(--danger); }
+
+.excluded { color: var(--muted); font-size: .74rem; border-top: 1px solid var(--border); padding-top: .7rem; }
+.excluded b { color: var(--text); font-weight: 550; }
+
+/* --- console --- */
+
+.console-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: .9rem; gap: .6rem; }
+
+.console-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+}
+.console-head > span { font-weight: 570; }
+.console-actions { display: flex; align-items: center; gap: .5rem; }
+.follow { color: var(--muted); font-size: .8rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
+
+.console {
+  flex: 1; margin: 0; min-height: 0;
+  overflow: auto;
+  background: var(--console-bg); color: var(--console-text);
+  border-radius: var(--radius); border: 1px solid var(--border);
+  padding: .9rem 1rem;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.console .hint { color: #7b828d; }
+.console .cmdline { color: #7aa2f7; }
+.console .bad { color: #ff8a80; }
+.console .good { color: #7fd6a0; }
+.console .warn { color: #e5c07b; }
+.console .end { color: #7b828d; font-style: italic; }
+
+/* --- configuration --- */
+
+.config-wrap { flex: 1; display: flex; flex-direction: column; padding: 1rem; gap: .8rem; min-width: 0; }
+.config-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
+.config-head h2 { margin: 0; font-size: 1rem; }
+.config-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+
+#configEditor {
+  flex: 1; min-height: 320px; resize: none;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: .9rem 1rem;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+  tab-size: 2;
+}
+#configEditor:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* --- history --- */
+
+.history-wrap { flex: 1; padding: 1rem; overflow: auto; }
+.history-wrap h2 { margin: 0 0 .2rem; font-size: 1rem; }
+.history { width: 100%; border-collapse: collapse; margin-top: .9rem; }
+.history th, .history td {
+  text-align: left; padding: .5rem .6rem;
+  border-bottom: 1px solid var(--border); font-size: .85rem;
+}
+.history th { color: var(--muted); font-weight: 550; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+.history .ok { color: var(--ok); }
+.history .fail { color: var(--danger); }
+.history .run { color: var(--accent); }
+
+/* --- shared --- */
+
+.btn {
+  font: inherit; font-weight: 550; cursor: pointer;
+  padding: .42rem .8rem; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.btn:hover { background: var(--surface-2); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger:hover { filter: brightness(1.08); }
+.btn-quiet { background: none; }
+
+.select {
+  font: inherit; padding: .42rem .6rem; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+
+.muted { color: var(--muted); margin: .15rem 0 0; }
+.small { font-size: .78rem; }
+code { font-family: var(--mono); font-size: .92em; }
+
+.dialog {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); color: var(--text);
+  padding: 1.2rem; max-width: 30rem; box-shadow: 0 12px 40px rgba(0,0,0,.28);
+}
+.dialog::backdrop { background: rgba(0,0,0,.45); }
+.dialog h3 { margin: 0 0 .5rem; font-size: 1rem; }
+.dialog p { margin: 0 0 .5rem; color: var(--muted); }
+.dialog menu { display: flex; justify-content: flex-end; gap: .5rem; margin: 1rem 0 0; padding: 0; }
+.confirm-dry { color: var(--ok) !important; font-weight: 550; }
+
+.toast {
+  position: fixed; bottom: 1.1rem; left: 50%; transform: translateX(-50%);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .6rem 1rem;
+  box-shadow: 0 8px 26px rgba(0,0,0,.22); font-weight: 550;
+  max-width: min(40rem, 90vw);
+}
+.toast.is-bad { border-color: var(--danger); color: var(--danger); }
+.toast.is-good { border-color: var(--ok); color: var(--ok); }
+
+@media (max-width: 760px) {
+  .panel.is-active { flex-direction: column; }
+  .sidebar { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); max-height: 44vh; }
+}

@@ -6,6 +6,9 @@
 # any depth, so a shipped examples/cluster.yaml would have been excluded
 # silently — present on the author's disk, missing for everyone who cloned.
 /cluster.yaml
+# Written by the web UI before it overwrites the file above. Same personal
+# values, same reason to keep it out, same anchoring.
+/cluster.yaml.bak
 
 templates/install-config.yaml
 install-dir/

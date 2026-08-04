@@ -6,8 +6,31 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-
 ### Added
+
+- `ocplab web`: a browser UI for the lab — dashboard, a `cluster.yaml` editor
+  with live validation, and every operation with its output streaming as it
+  runs.
+
+  It is a second thin layer, not a second program: the server never calls AWS
+  and never reads Terraform state, it runs `ocplab <command>` as a subprocess
+  and shows that command's own output. The browser also cannot supply an argv —
+  it posts a command *id* and the server runs the fixed argv that id maps to,
+  so there is no path from user input to a command line.
+
+  It binds `127.0.0.1` with no flag to change it, rejects requests whose `Host`
+  header is not loopback (a page you visit could otherwise point a DNS name at
+  `127.0.0.1` and drive it through your browser), and requires a token minted
+  at startup. Operations are serialised one at a time, because there is one
+  Terraform state and two concurrent applies corrupt it. Output is kept
+  server-side, so closing the tab does not stop the run, and reopening it
+  replays everything before following live.
+
+  `ocplab ssh` is deliberately excluded — it needs a real terminal, and a web
+  terminal would hand whoever reached the server a root shell on the nodes.
+
+  No new dependency and no build step: a stdlib HTTP server, plus plain HTML,
+  CSS and JavaScript.
 
 - `oc` and `kubectl` now point at **this** cluster, not just at the matching
   client version. Activating the venv exports `KUBECONFIG`, and `deactivate`

@@ -1579,6 +1579,28 @@ def cmd_console(args):
         print('  eval "$(ocplab env)"')
 
 
+def cmd_web(args):
+    """Serve the local web UI.
+
+    Kept to the same shape as `ssh`: this file resolves what to run and hands
+    over, with no logic of its own. The server lives in web/server.py, is
+    imported rather than embedded so `ocplab` stays a readable single file, and
+    talks to the rest of the project only by running `ocplab` as a subprocess.
+    """
+    server_py = REPO_ROOT / "web" / "server.py"
+    if not server_py.is_file():
+        die(f"{server_py} is missing — the web UI is part of the repository, not a separate install.")
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ocplab_web_server", server_py)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
+        die(f"could not load the web server ({exc}).")
+    module.serve(port=args.port, open_browser=not args.no_browser)
+
+
 def cmd_env(args):
     """Print the shell settings for this cluster, for `eval "$(ocplab env)"`.
 
@@ -1748,6 +1770,26 @@ def build_parser():
 
     p = subparsers.add_parser("console", parents=[sub_global_parser], help="print the console URL and the kubeadmin password")
     p.set_defaults(func=cmd_console)
+
+    p = subparsers.add_parser(
+        "web", parents=[sub_global_parser],
+        help="serve the local web UI on 127.0.0.1",
+        description=(
+            "Serves a browser UI for this lab: the dashboard, the cluster.yaml "
+            "editor, and every operation with its output streamed live.\n\n"
+            "It binds 127.0.0.1 and nothing else, rejects requests whose Host "
+            "header is not loopback, and requires a token minted at startup — "
+            "this server holds your AWS credentials and can create and destroy "
+            "real infrastructure, so it is not something to expose. There is "
+            "deliberately no flag to change the bind address.\n\n"
+            "'ocplab ssh' is not available in the browser: it needs a real "
+            "terminal. Run it from a shell."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--port", type=int, default=8770, help="port on 127.0.0.1 (default: 8770)")
+    p.add_argument("--no-browser", action="store_true", help="don't open a browser window")
+    p.set_defaults(func=cmd_web)
 
     p = subparsers.add_parser(
         "env", parents=[sub_global_parser],

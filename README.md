@@ -657,6 +657,7 @@ verification — lives in the Ansible roles listed above.
 | `ocplab cost` | Approximate current USD/hour cost of what's actually deployed | No |
 | `ocplab console` | Prints the console URL and the `kubeadmin` password | No |
 | `ocplab env` | Prints `export KUBECONFIG=...` for this cluster, to `eval` | No |
+| `ocplab web` | Serves the browser UI on `127.0.0.1` | No (but it can run everything that does) |
 | `ocplab ssh [node]` | Lists the running nodes, or opens a shell on one | No |
 | `ocplab repair` | Recreates a worker that disappeared, on a running cluster | No |
 | `ocplab versions list\|download\|rm` | Manages the cached OpenShift binaries | No |
@@ -679,6 +680,52 @@ behind and answer confidently about a config you no longer have. The
 `render` command itself is the exception to the exception: there the
 generated files *are* the subject of the command, so `ocplab render
 --dry-run -v` shows the diff and writes nothing.
+
+### 🖥️ The web UI — `ocplab web`
+
+Everything the CLI does, in a browser: a dashboard, a `cluster.yaml` editor
+with live validation, and every operation with its output streaming as it
+happens.
+
+```bash
+source .venv/bin/activate
+./ocplab web
+```
+
+It prints a URL with a token and opens it (`--no-browser` if you'd rather it
+didn't, `--port` to move it off 8770).
+
+**It is a second thin layer, not a second program.** The server never talks to
+AWS and never reads Terraform state — it runs `ocplab <command>` as a
+subprocess and shows you that command's own output. Whatever the CLI does, the
+UI does, because it *is* the CLI.
+
+Three things worth knowing:
+
+- **It only ever listens on `127.0.0.1`, and there is no flag to change that.**
+  This server holds your AWS credentials and can create and destroy real
+  infrastructure. It also refuses any request whose `Host` header isn't
+  loopback, which stops a page you happen to be visiting from pointing a DNS
+  name at `127.0.0.1` and driving it through your browser. Every API call needs
+  a token that is minted fresh on each start, so the URL is not worth sharing —
+  it dies with the server.
+- **One operation at a time.** There is one cluster and one Terraform state;
+  two concurrent applies is how you corrupt it. Starting a second operation
+  while one runs is refused, with the reason.
+- **Closing the tab does not stop the run.** Output is kept server-side, so
+  reloading — or opening the page forty minutes into a deploy — replays
+  everything and then follows live. The durable record is still the plain-text
+  file per run under `logs/`, written by the Ansible callback and completely
+  independent of this UI.
+
+**`ocplab ssh` is not there**, and won't be: it hands the terminal over, which
+a browser has nowhere to put — and a web terminal would hand anyone who
+reached this server a root shell on your nodes. Run it from a shell. `env`,
+`init` and `setup` are absent too, for duller reasons the UI explains on the
+page.
+
+There is no build step and no new dependency: a stdlib HTTP server, and plain
+HTML, CSS and JavaScript you can read on GitHub.
 
 ### 🎯 Which cluster `oc` talks to
 

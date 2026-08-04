@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>ocplab</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot" id="statusDot" title="idle"></span>
+      <h1>ocplab</h1>
+      <code class="repo" id="repoPath"></code>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab is-active" data-tab="operations" role="tab">Operations</button>
+      <button class="tab" data-tab="config" role="tab">Configuration</button>
+      <button class="tab" data-tab="history" role="tab">History</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Operations -->
+    <section class="panel is-active" id="tab-operations">
+      <aside class="sidebar">
+        <label class="dryrun">
+          <input type="checkbox" id="dryRun">
+          <span>Dry run <em>preview only, changes nothing</em></span>
+        </label>
+        <div id="commandGroups"></div>
+        <p class="excluded" id="excluded"></p>
+      </aside>
+
+      <div class="console-wrap">
+        <div class="console-head">
+          <span id="jobLabel">No operation running</span>
+          <div class="console-actions">
+            <button id="cancelBtn" class="btn btn-quiet" hidden>Cancel</button>
+            <button id="clearBtn" class="btn btn-quiet">Clear</button>
+            <label class="follow"><input type="checkbox" id="follow" checked> Follow</label>
+          </div>
+        </div>
+        <pre class="console" id="console" tabindex="0"><span class="hint">Pick an operation on the left. Output streams here, and is kept even if you reload or close this tab — the run carries on regardless.</span></pre>
+      </div>
+    </section>
+
+    <!-- Configuration -->
+    <section class="panel" id="tab-config">
+      <div class="config-wrap">
+        <div class="config-head">
+          <div>
+            <h2>cluster.yaml</h2>
+            <p class="muted" id="configState"></p>
+          </div>
+          <div class="config-actions">
+            <select id="templateSelect" class="select">
+              <option value="">Load a template…</option>
+            </select>
+            <button id="validateBtn" class="btn">Validate</button>
+            <button id="saveBtn" class="btn btn-primary">Save</button>
+          </div>
+        </div>
+        <textarea id="configEditor" spellcheck="false" autocomplete="off"
+                  placeholder="Paste your cluster.yaml here, or load one of the templates."></textarea>
+        <p class="muted small">
+          Saving writes <code>cluster.yaml</code> in the repository root and keeps the
+          previous contents in <code>cluster.yaml.bak</code>. It is gitignored, and it
+          is meant to hold real values — your domain, AWS profile and email.
+        </p>
+      </div>
+    </section>
+
+    <!-- History -->
+    <section class="panel" id="tab-history">
+      <div class="history-wrap">
+        <h2>Recent runs</h2>
+        <p class="muted small">
+          This session only. The durable record is one plain-text file per run under
+          <code>logs/</code>, written by the Ansible callback and independent of this UI.
+        </p>
+        <table class="history" id="historyTable">
+          <thead><tr><th>Operation</th><th>Started</th><th>Duration</th><th>Result</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Confirmation -->
+  <dialog id="confirmDialog" class="dialog">
+    <form method="dialog">
+      <h3 id="confirmTitle"></h3>
+      <p id="confirmText"></p>
+      <p class="confirm-dry" id="confirmDry" hidden>Dry run is on — this previews without changing anything.</p>
+      <menu>
+        <button value="cancel" class="btn btn-quiet">Cancel</button>
+        <button value="ok" class="btn btn-danger" id="confirmOk">Run it</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script>window.OCPLAB_TOKEN = "__OCPLAB_TOKEN__";</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
