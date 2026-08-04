@@ -203,6 +203,9 @@ code, kbd { font-family: var(--mono); font-size: .87em; }
 
 main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 .view { display: none; max-width: 1200px; margin: 0 auto; }
+/* Wider than the rest: four columns of action rows is a layout, not prose,
+   and 1200px is a comfortable measure for text rather than for this. */
+#view-actions.is-active { max-width: 1560px; }
 .view.is-active { display: block; }
 
 .view-head {
@@ -287,16 +290,28 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 
 /* ── actions ───────────────────────────────────────────────── */
 
-/* Groups sit side by side rather than stacked. Inspect alone is nine rows;
-   stacked, the tab was mostly scrolling. */
+/* Four groups, four columns, one row — Teardown wrapping onto a second row
+   put the most dangerous action furthest from the eye, which is backwards.
+   Fixed count rather than auto-fit: auto-fit sized the columns off a min
+   width and gave three, and the point here is the arrangement, not the
+   density. */
 #actionGroups {
-  display: grid; gap: 1.4rem 1.1rem; align-items: start;
-  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  display: grid; gap: 1.1rem; align-items: start;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-.agroup { margin-bottom: 0; }
-.agroup-head { display: flex; align-items: baseline; gap: .6rem; margin-bottom: .75rem; flex-wrap: wrap; }
+.agroup { margin-bottom: 0; min-width: 0; }
+
+@media (max-width: 1250px) { #actionGroups { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px)  { #actionGroups { grid-template-columns: 1fr; } }
+/* Title and blurb stacked, with a floor under the pair: side by side, the
+   blurb wrapped in some groups and not others, so the lists below started at
+   four different heights. */
+.agroup-head { margin-bottom: .7rem; min-height: 3.1rem; }
 .agroup-head h3 { font-size: .96rem; }
-.agroup-head span { color: var(--faint); font-size: .8rem; }
+.agroup-head span {
+  display: block; color: var(--faint); font-size: .79rem;
+  line-height: 1.35; margin-top: .15rem;
+}
 
 .actlist {
   border: 1px solid var(--border); border-radius: var(--r);
@@ -317,7 +332,8 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 .act-row { display: flex; align-items: stretch; }
 
 .act-main {
-  flex: 1; display: flex; align-items: center; gap: .65rem;
+  flex: 1; min-height: 2.9rem;      /* every row the same height */
+  display: flex; align-items: center; gap: .65rem; min-width: 0;
   border: 0; background: none; color: var(--text); font: inherit;
   text-align: left; cursor: pointer;
   padding: .7rem .9rem; border-left: 3px solid transparent;
@@ -325,7 +341,7 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 }
 .act-main:hover:not(:disabled) { background: var(--sunken); border-left-color: var(--tone); }
 .act-main:disabled { opacity: .4; cursor: not-allowed; }
-.act-name { font-weight: 570; font-size: .92rem; }
+.act-name { font-weight: 570; font-size: .92rem; overflow-wrap: anywhere; }
 .act-item[data-tone="danger"] .act-name,
 .act-item[data-tone="warn"] .act-name,
 .act-item[data-tone="ok"] .act-name { color: var(--tone); }
