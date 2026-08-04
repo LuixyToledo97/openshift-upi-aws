@@ -27,6 +27,11 @@ weight not everyone using the lab wants running by default. Should be its
 own opt-in piece (own role, own `ocplab` subcommand or flag), never part of
 the default `deploy` path.
 
+**Parked on 2026-08-04, deliberately.** Not for lack of effort or value — the
+scope below is genuinely undecided, and building against an undecided scope is
+how an opt-in extra turns into a second product. It stays here until there is
+an answer to "what would you actually look at, and when?".
+
 **Open questions** (genuinely open — no solution decided yet):
 - Scope: infra-side (AWS: costs, instance health) only, platform-side
   (OpenShift: operators, resource usage) only, or both unified?
