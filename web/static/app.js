@@ -448,6 +448,7 @@ function renderAbout() {
   for (const [label, href, primary] of [
     ["View the repository", a.repo_url, true],
     [`@${a.github_user} on GitHub`, a.github_url, false],
+    [`@${a.medium_user} on Medium`, a.medium_url, false],
   ]) {
     if (!href) continue;
     const link = el("a", "btn" + (primary ? " btn-primary" : ""), label);

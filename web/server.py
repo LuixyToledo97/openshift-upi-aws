@@ -147,6 +147,8 @@ ABOUT = {
     "github_user": "LuixyToledo97",
     "github_url": "https://github.com/LuixyToledo97",
     "repo_url": "https://github.com/LuixyToledo97/openshift-upi-aws",
+    "medium_user": "luixytoledo97",
+    "medium_url": "https://luixytoledo97.medium.com/",
     "fonts": "Inter and JetBrains Mono, bundled under the SIL Open Font License 1.1.",
 }
 
