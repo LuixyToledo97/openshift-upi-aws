@@ -729,6 +729,12 @@ The output panel appears when you run something, docks to the bottom or the
 right, and is drag-resizable; it reserves space rather than covering the page,
 and remembers where you put it. Closing it never stops the run.
 
+Its dropdown switches what the panel is showing: the run's own output, or any
+log file being tailed live — including Terraform's resource-by-resource detail
+and the OpenShift installer's own log. During a deploy that is the difference
+between reading "terraform apply, 5m47s" and watching the resources appear,
+and it saves the second terminal the CLI otherwise sends you to.
+
 Three things worth knowing:
 
 - **It only ever listens on `127.0.0.1`, and there is no flag to change that.**

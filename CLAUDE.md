@@ -576,6 +576,21 @@ runs `ocplab <command>` as a subprocess and streams the output. Anything about
   and fails noisily (`Operation not supported`) while the server is fine. For a
   background service, printing the URL — and reprinting it from `status` — is
   both simpler and more honest.
+- **The output panel can tail log files, not just job streams.** During a
+  deploy the playbook line reads "terraform apply, 5m47s" while everything
+  interesting is in `logs/*_terraform-apply.log` and
+  `install-dir/.openshift_install.log` — which the roles answer by telling you
+  to open another terminal, exactly the errand a UI should remove. `/api/logs`
+  enumerates them and `/api/logs/stream` tails one. The browser sends a *name*
+  matched against a freshly built list, never a path: same rule as `COMMANDS`,
+  so there is nothing to sanitise. Only the last 256 KB is sent on attach — a
+  terraform log runs to megabytes.
+- **The dashboard poll is unconditional, and that matters.** It used to skip
+  whenever a stream was open, which meant watching a log froze the status
+  cards and the running chip for the whole deploy. The auto-attach to a new
+  running job is what gets suppressed instead, and only while a log is on
+  screen: yanking the panel away from a log someone chose to watch is worse
+  than not reattaching.
 - **Stdlib only, no build step.** No new entry in `requirements.txt`, no Node,
   no `node_modules`. The frontend has to stay as readable on GitHub as the
   rest of the repository.

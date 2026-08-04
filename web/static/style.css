@@ -469,6 +469,7 @@ body.is-resizing { user-select: none; cursor: grabbing; }
   border-radius: var(--r-sm); border: 1px solid var(--border-2);
   background: var(--raised); color: var(--text);
 }
+.control-sm { font-size: .8rem; padding: .26rem .5rem; max-width: 15rem; }
 
 .dialog {
   border: 1px solid var(--border); border-radius: var(--r-lg);

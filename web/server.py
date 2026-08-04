@@ -46,6 +46,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 OCPLAB = REPO_ROOT / "ocplab"
 VENV_BIN = REPO_ROOT / ".venv" / "bin"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LOGS_DIR = REPO_ROOT / "logs"
 
 # The whole catalogue of what the UI can run. `argv` is fixed per entry — see
 # the module docstring. `confirm` is the text the browser must make the user
@@ -164,6 +165,35 @@ EXCLUDED = {
     "init": "creates cluster.yaml; use the config editor here instead.",
     "setup": "builds the venv this server is already running inside.",
 }
+
+
+# How much of a log to send when a viewer attaches. A terraform apply log runs
+# to a few MB and the installer's is worse; dumping all of it would stall the
+# browser to show you scrollback nobody reads. The tail is what you want.
+LOG_TAIL_BYTES = 256 * 1024
+
+
+def log_sources():
+    """The log files this server is willing to show, newest first.
+
+    Returns (name, label, path). The browser only ever sends a `name`, which is
+    matched against a freshly built list — it never contributes to a path. That
+    is the same rule as COMMANDS: no user input reaches the filesystem or an
+    argv, so there is nothing to sanitise.
+
+    The installer's log is listed first when it exists: during a deploy it is
+    the one you actually want, and it is the one the CLI tells you to `less +F`
+    in another terminal.
+    """
+    found = []
+    installer = REPO_ROOT / "install-dir" / ".openshift_install.log"
+    if installer.is_file():
+        found.append(("installer", "OpenShift installer", installer))
+    if LOGS_DIR.is_dir():
+        runs = sorted(LOGS_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in runs:
+            found.append((path.name, path.stem, path))
+    return found
 
 
 def child_env():
@@ -424,6 +454,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(404, {"error": "no such template"})
                 return
             self._json(200, {"content": target.read_text()})
+        elif path == "/api/logs":
+            now = time.time()
+            self._json(200, {"logs": [
+                {"name": name, "label": label,
+                 "size": src.stat().st_size,
+                 # "live" is what lets the UI mark the one currently being
+                 # written, which during a deploy is the only one you want.
+                 "live": now - src.stat().st_mtime < 30}
+                for name, label, src in log_sources()
+            ]})
+        elif path == "/api/logs/stream":
+            self._tail(params.get("name", [""])[0])
         elif path.startswith("/api/jobs/") and path.endswith("/stream"):
             self._stream(path.split("/")[3])
         else:
@@ -576,6 +618,62 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json(504, {"error": "validation timed out"})
                 return
         self._json(200, {"ok": proc.returncode == 0, "output": proc.stdout.strip()})
+
+    def _tail(self, name):
+        """Stream a log file: its tail, then whatever gets appended.
+
+        This is what makes the UI worth having during a deploy. The playbook's
+        own output says "terraform apply, 5m47s"; the detail of which resource
+        is being created lives in the terraform log, and the installer's
+        bootstrap progress lives in its own. The CLI answers that by telling
+        you to open another terminal — which is exactly the errand a UI should
+        be saving you.
+
+        Poll rather than inotify: two files, half-second granularity, and no
+        dependency. A shrinking file means it was rotated or regenerated (a new
+        `ignition` run replaces the installer log), so the reader restarts
+        rather than seeking past the end of a file that no longer has one.
+        """
+        source = dict((n, p) for n, _, p in log_sources()).get(name)
+        if source is None:
+            self._json(404, {"error": "no such log"})
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        try:
+            size = source.stat().st_size
+            offset = max(0, size - LOG_TAIL_BYTES)
+            with open(source, "r", errors="replace") as handle:
+                if offset:
+                    handle.seek(offset)
+                    handle.readline()  # drop the half line the offset landed in
+                    self._event({"line": f"--- showing the last {LOG_TAIL_BYTES // 1024} KB ---"})
+                while True:
+                    chunk = handle.read()
+                    if chunk:
+                        for line in chunk.splitlines():
+                            self._event({"line": line})
+                        continue
+                    # Nothing new. A file that shrank was replaced underneath us.
+                    if source.exists() and source.stat().st_size < handle.tell():
+                        self._event({"line": "--- file was replaced, following the new one ---"})
+                        handle.seek(0)
+                        continue
+                    self.wfile.write(b": keepalive\n\n")  # also how a gone client is noticed
+                    self.wfile.flush()
+                    time.sleep(0.5)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # viewer navigated away; nothing to clean up
+        except OSError as exc:
+            try:
+                self._event({"line": f"--- stopped reading: {exc} ---"})
+            except OSError:
+                pass
 
     def _stream(self, job_id):
         job = RUNNER.get(job_id)

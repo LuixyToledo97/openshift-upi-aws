@@ -162,11 +162,69 @@ function appendLine(text) {
   if ($("follow").checked) box.scrollTop = box.scrollHeight;
 }
 
+/* The panel shows one of two kinds of source: a job's own stream, or a log
+   file being tailed. Switching between them is the point — the playbook output
+   says "terraform apply, 5m47s" while the resource-by-resource detail is in
+   the terraform log, and during a bootstrap wait the installer's log is the
+   only thing actually moving. */
+
+async function refreshLogList() {
+  const select = $("logSelect");
+  let logs = [];
+  try {
+    ({ logs } = await api("/api/logs"));
+  } catch {
+    // An older server without /api/logs, or none available. Degrade to the
+    // run output alone rather than breaking the panel.
+    select.hidden = true;
+    return;
+  }
+  select.hidden = false;
+  const chosen = select.value;
+  while (select.options.length > 1) select.remove(1);
+  for (const log of logs) {
+    const opt = el("option", null, (log.live ? "● " : "") + log.label);
+    opt.value = log.name;
+    select.append(opt);
+  }
+  // Keep the current selection across refreshes, or fall back to run output.
+  select.value = [...select.options].some((o) => o.value === chosen) ? chosen : "";
+}
+
+function showLog(name) {
+  if (!name) {
+    // Back to the run's own output. Look the job up rather than reconstructing
+    // one from what happens to be on screen — the panel title is a label, not
+    // a source of truth.
+    const job = (state.recent || []).find((j) => j.id === attached);
+    if (job) openOutput(job, { fresh: true });
+    else { if (stream) { stream.close(); stream = null; } $("console").textContent = ""; }
+    return;
+  }
+  if (stream) { stream.close(); stream = null; }
+  panel.open();
+  $("console").textContent = "";
+  $("panelTitle").textContent = $("logSelect").selectedOptions[0].textContent.replace(/^● /, "");
+  $("panelSub").textContent = "tailing";
+  $("cancelBtn").hidden = true;
+
+  stream = new EventSource(`/api/logs/stream?name=${encodeURIComponent(name)}&token=${encodeURIComponent(TOKEN)}`);
+  stream.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.line !== undefined) appendLine(data.line);
+  };
+  stream.onerror = () => {
+    $("panelSub").textContent = "stopped";
+    if (stream) { stream.close(); stream = null; }
+  };
+}
+
 function openOutput(job, { fresh } = {}) {
   panel.open();
   if (stream) { stream.close(); stream = null; }
   if (fresh || attached !== job.id) $("console").textContent = "";
   attached = job.id;
+  $("logSelect").value = "";
 
   $("panelTitle").textContent = job.label + (job.dry_run ? " (dry run)" : "");
   $("panelSub").textContent = job.running ? "running…" : resultText(job);
@@ -491,9 +549,12 @@ async function refresh() {
     renderAbout();
     setLive(next.current);
     if (document.querySelector('.viewbtn[data-view="runs"]').classList.contains("is-active")) renderRuns();
+    refreshLogList();
     // Reattaching after a reload is why the lines live server-side: a deploy
-    // started twenty minutes ago picks up exactly where it was.
-    if (next.current && next.current.running && attached !== next.current.id) {
+    // started twenty minutes ago picks up exactly where it was. Never while a
+    // log is on screen, though — yanking the panel away from the terraform log
+    // someone is deliberately watching is worse than not reattaching.
+    if (next.current && next.current.running && attached !== next.current.id && !$("logSelect").value) {
       openOutput(next.current, { fresh: true });
     }
   } catch (err) {
@@ -571,6 +632,7 @@ function init() {
 
   $("panelClose").addEventListener("click", () => panel.close());
   $("dockBtn").addEventListener("click", () => panel.toggleDock());
+  $("logSelect").addEventListener("change", (ev) => showLog(ev.target.value));
   $("runChip").addEventListener("click", () => {
     const job = (state.recent || []).find((j) => j.id === $("runChip").dataset.job);
     if (job) openOutput(job);
@@ -596,7 +658,10 @@ function init() {
 
   refresh();
   loadConfig().catch((err) => toast(err.message, "bad"));
-  setInterval(() => { if (!stream) refresh(); }, 6000);
+  // Unconditional: an earlier version skipped this whenever a stream was open,
+  // which meant that watching a log froze the dashboard and the running chip
+  // for the whole deploy — precisely when they matter.
+  setInterval(refresh, 6000);
 }
 
 document.addEventListener("DOMContentLoaded", init);
