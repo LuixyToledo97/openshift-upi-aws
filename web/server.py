@@ -505,7 +505,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, {
                 "commands": COMMANDS,
                 "about": {**ABOUT, "version": self.server.cli_version},
-                "repo": str(REPO_ROOT),
                 "config_exists": (REPO_ROOT / "cluster.yaml").exists(),
                 "current": RUNNER.current.as_dict() if RUNNER.current else None,
                 # Already dicts: recent() merges live jobs with history loaded

@@ -1539,7 +1539,10 @@ def collect_status(cfg):
             "cache": [{"version": v["version"], "size": v["size"]} for v in cached],
             "cache_total": sum(v["size"] for v in cached),
             "cache_total_human": human_size(sum(v["size"] for v in cached)) if cached else None,
-            "cache_dir": str(BIN_CACHE),
+            # Tilde form, not the expanded path. Shorter, matches how the docs
+            # refer to it — and it keeps a username out of anything that shows
+            # this, which includes screenshots of the web UI.
+            "cache_dir": str(BIN_CACHE).replace(str(Path.home()), "~", 1),
         },
         "kubeconfig": {
             "expected": str(KUBECONFIG_PATH),
