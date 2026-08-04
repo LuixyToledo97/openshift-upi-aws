@@ -184,8 +184,13 @@ code, kbd { font-family: var(--mono); font-size: .87em; }
   padding: .38rem .82rem; border-radius: 8px;
   transition: color .12s, background .12s;
 }
-.viewbtn:hover { color: var(--text); }
-.viewbtn.is-active { background: var(--raised); color: var(--text); box-shadow: var(--shadow); }
+/* The tabs, the marks and the Configuration buttons all read --tint, so the
+   whole chrome lights up as one instead of the logo doing its own thing. */
+.viewbtn:hover { color: var(--tint); }
+.viewbtn.is-active {
+  background: var(--raised); color: var(--tint); box-shadow: var(--shadow);
+  border: 1px solid color-mix(in srgb, var(--tint) 32%, transparent);
+}
 
 /* Static dot, not a spinner: a permanent animation is noise, and this only
    has to answer "is something running", which a colour answers. */
@@ -205,7 +210,7 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 .view { display: none; max-width: 1200px; margin: 0 auto; }
 /* Wider than the rest: four columns of action rows is a layout, not prose,
    and 1200px is a comfortable measure for text rather than for this. */
-#view-actions.is-active { max-width: 1560px; }
+#view-actions.is-active, #view-help.is-active { max-width: 1560px; }
 .view.is-active { display: block; }
 
 .view-head {
@@ -403,7 +408,7 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
   font-family: var(--mono); font-size: 12.6px; line-height: 1.7; tab-size: 2;
   box-shadow: var(--shadow);
 }
-#configEditor:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+#configEditor:focus-visible { outline: 2px solid var(--tint); outline-offset: -1px; }
 
 .editor-side { display: flex; flex-direction: column; gap: .85rem; }
 .validation {
@@ -514,15 +519,19 @@ body.is-resizing { user-select: none; cursor: grabbing; }
 
 /* Equal heights across a row: `align-items: start` let each card hug its own
    content, which made a row of three look like a broken staircase. */
-.help { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+/* Four workflows, four columns, one row — the fourth wrapping underneath was
+   the only reason this tab scrolled. */
+.help { display: grid; gap: .9rem; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1250px) { .help { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px)  { .help { grid-template-columns: 1fr; } }
 .help-card { display: flex; flex-direction: column; }
 .help-steps { flex: 1; }
 .help-card {
   background: var(--raised); border: 1px solid var(--border);
-  border-radius: var(--r-lg); padding: 1.15rem 1.25rem; box-shadow: var(--shadow);
+  border-radius: var(--r-lg); padding: 1rem 1.05rem; box-shadow: var(--shadow);
 }
 .help-card h3 { font-size: 1rem; margin-bottom: .3rem; }
-.help-steps { margin: .9rem 0 0; padding-left: 1.15rem; display: grid; gap: .85rem; }
+.help-steps { margin: .8rem 0 0; padding-left: 1.05rem; display: grid; gap: .6rem; }
 .help-steps li { line-height: 1.5; }
 .help-steps li::marker { color: var(--accent); font-weight: 650; }
 .help-step-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
@@ -531,7 +540,7 @@ body.is-resizing { user-select: none; cursor: grabbing; }
   color: var(--accent); background: var(--accent-bg);
   padding: .08rem .38rem; border-radius: 5px; font-size: .78rem;
 }
-.help-steps p { color: var(--muted); font-size: .83rem; margin-top: .2rem; }
+.help-steps p { color: var(--muted); font-size: .8rem; line-height: 1.45; margin-top: .1rem; }
 .help-note {
   margin-top: 1rem; padding: .6rem .75rem; border-radius: var(--r-sm);
   background: var(--warn-bg); color: var(--warn);
@@ -547,10 +556,14 @@ body.is-resizing { user-select: none; cursor: grabbing; }
   background: var(--raised); color: var(--text);
   transition: background .12s, border-color .12s, transform .1s;
 }
-.btn:hover { background: var(--sunken); }
+.btn:hover { background: var(--sunken); border-color: var(--tint); color: var(--tint); }
+.btn-primary:hover { color: #fff; }
 .btn:active { transform: translateY(1px); }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn-primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+.btn-primary {
+  background: var(--tint); border-color: var(--tint); color: #fff;
+  transition: background .3s ease, border-color .3s ease;
+}
+.btn-primary:hover { filter: brightness(1.12); }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn-danger:hover { filter: brightness(1.08); }
 .btn-quiet { background: none; border-color: transparent; color: var(--muted); }
@@ -572,7 +585,9 @@ body.is-resizing { user-select: none; cursor: grabbing; }
   font: inherit; font-size: .87rem; padding: .46rem .72rem;
   border-radius: var(--r-sm); border: 1px solid var(--border-2);
   background: var(--raised); color: var(--text);
+  transition: border-color .3s ease;
 }
+.control:hover, .control:focus-visible { border-color: var(--tint); outline: none; }
 .control-sm { font-size: .8rem; padding: .26rem .5rem; max-width: 15rem; }
 
 .dialog {

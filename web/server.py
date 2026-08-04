@@ -153,13 +153,16 @@ ABOUT = {
     "fonts": "Inter and JetBrains Mono, bundled under the SIL Open Font License 1.1.",
 }
 
-# `ocplab ssh` is deliberately absent and stays absent: it hands the terminal
-# over with execvp, which a browser has nowhere to put. Wiring a web terminal
-# to it would also hand whoever reached this server a root shell on the nodes,
-# which is the one thing the loopback binding exists to prevent. `ocplab env`
-# is absent for a simpler reason — it prints a line for a shell to eval, and
-# there is no shell here.
-EXCLUDED = {
+# Commands deliberately kept out of COMMANDS, recorded here for whoever wonders
+# why. Not sent to the browser: an action that is not in the menu has already
+# said it cannot be run, and listing the absences was noise at the foot of the
+# page.
+#
+# `ocplab ssh` is the one that matters. It hands the terminal over with execvp,
+# which a browser has nowhere to put — and wiring a web terminal to it would
+# hand whoever reached this server a root shell on the nodes, which is the one
+# thing the loopback binding exists to prevent.
+_EXCLUDED_AND_WHY = {
     "ssh": "needs a real terminal — run it from a shell.",
     "env": "prints a line for your shell to eval; the browser has no shell.",
     "init": "creates cluster.yaml; use the config editor here instead.",
@@ -495,7 +498,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/state":
             self._json(200, {
                 "commands": COMMANDS,
-                "excluded": EXCLUDED,
                 "about": {**ABOUT, "version": self.server.cli_version},
                 "repo": str(REPO_ROOT),
                 "config_exists": (REPO_ROOT / "cluster.yaml").exists(),

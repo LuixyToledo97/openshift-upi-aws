@@ -20,7 +20,7 @@ const GROUPS = [
 /* Fetched on demand, never polled: each costs a round trip to AWS. */
 const LIVE = ["verify", "cost", "power-status", "console"];
 
-let state = { commands: [], excluded: {}, recent: [], about: {} };
+let state = { commands: [], recent: [], about: {} };
 let stream = null;
 let attached = null;
 let runFilter = "all";
@@ -465,8 +465,6 @@ function renderActions() {
     section.append(head, list);
     host.append(section);
   }
-  const notes = Object.entries(state.excluded).map(([n, w]) => `ocplab ${n} — ${w}`).join("\n");
-  $("excluded").textContent = notes ? `Not available here:\n${notes}` : "";
 }
 
 async function run(command) {
@@ -597,21 +595,46 @@ function renderHelp() {
 
 /* ── about ─────────────────────────────────────────────────── */
 
-/* The mark picks a different tint each time you hover it. There is no state
-   worth encoding in that colour — it is the one place in a tool that spends
-   its life saying "this costs money" and "this cannot be undone" where a bit
-   of play costs nothing. */
-const TINTS = ["var(--accent)", "var(--accent-2)", "var(--ok)", "var(--warn)", "var(--danger)", "var(--info)"];
+/* Variable *names*, not `var(...)` wrappers: the favicon has to be redrawn
+   with a literal colour, so the pick has to be resolvable to one. */
+const TINTS = ["--accent", "--accent-2", "--ok", "--warn", "--danger", "--info"];
 
-/* Set on <html>, not on the element hovered: the header mark, the About mark
-   and the About links all read the same variable, so they light up together
-   instead of drifting out of step with each other. */
+const MARK_PATHS = [
+  "M12.99 6.14 L5.95 10.20 L5.95 18.32",
+  "M8.97 23.54 L16.00 27.60 L23.03 23.54",
+  "M26.05 18.32 L26.05 10.20 L19.01 6.14",
+];
+
+/* The favicon is a file on disk, so it cannot follow a CSS variable. It is
+   redrawn as a data URI instead, which is the only way the tab icon can stay
+   in step with the two marks and the buttons. */
+function paintFavicon(colour) {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+    `<rect width="32" height="32" rx="8" fill="${colour}"/>` +
+    '<g fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">' +
+    MARK_PATHS.map((d) => `<path d="${d}"/>`).join("") +
+    '</g><circle cx="16" cy="16" r="3.2" fill="#fff"/></svg>';
+  const link = document.querySelector('link[rel="icon"]');
+  if (link) link.href = "data:image/svg+xml," + encodeURIComponent(svg);
+}
+
+function applyTint(name) {
+  const root = document.documentElement;
+  root.style.setProperty("--tint", `var(${name})`);
+  // Resolve to a literal so the favicon can be drawn with it. Computed values
+  // arrive with leading whitespace often enough to be worth trimming.
+  const literal = getComputedStyle(root).getPropertyValue(name).trim();
+  if (literal) paintFavicon(literal);
+}
+
+/* Set on <html>, not on the element hovered: both marks, the header tabs, the
+   Configuration buttons and the About links all read the same variable, so
+   they move together instead of drifting out of step. */
 function bindLogoTint(node) {
   if (!node) return;
-  node.addEventListener("mouseenter", () => {
-    const pick = TINTS[Math.floor(Math.random() * TINTS.length)];
-    document.documentElement.style.setProperty("--tint", pick);
-  });
+  node.addEventListener("mouseenter", () =>
+    applyTint(TINTS[Math.floor(Math.random() * TINTS.length)]));
 }
 
 function renderAbout() {
@@ -760,6 +783,7 @@ function init() {
   panel.bindResize();
   bindLogoTint(document.querySelector(".brand-mark"));
   bindLogoTint(document.querySelector(".about-mark"));
+  applyTint("--accent");
 
   document.querySelectorAll(".viewbtn").forEach((b) =>
     b.addEventListener("click", () => switchView(b.dataset.view)));
