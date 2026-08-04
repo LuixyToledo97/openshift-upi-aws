@@ -13,6 +13,10 @@ Terraform defines the infrastructure and the OpenShift installer only
 generates the Ignition configs and monitors the boot process. This is not
 ROSA nor IPI.
 
+- Two front ends over one engine: the **`ocplab` CLI**, and a **local browser
+  UI** (`ocplab web`) that runs the very same commands as subprocesses. Neither
+  is the "real" one; see `The web UI` below for the rules that keep the second
+  from becoming a second product.
 - Cluster: `ocp4lab` · Domain: `aws.example.com` (placeholder — set your
   own in `cluster.yaml`) · Region: `eu-west-1` by default (1 AZ)
 - 3 masters `m5.xlarge` + 2 workers `m5.large` + 1 temporary bootstrap
@@ -378,7 +382,7 @@ hook can't reach. Four things about it are load-bearing:
 - **It exports the path even when `install-dir` doesn't exist.** Gating on
   existence would silently fall back to `~/.kube/config` for any shell
   activated before the first deploy — exactly the bug. `oc` failing with
-  `localhost:8080 refused` is the safe direction, and README §10 names it.
+  `localhost:8080 refused` is the safe direction, and README §11 names it.
 - **README §2.1.1 is the tested-versions table, and it is a factual record,
   not a compatibility claim.** A row only goes in after a real end-to-end run
   against AWS: deploy → verify with every node Ready and every ClusterOperator
@@ -628,6 +632,32 @@ runs `ocplab <command>` as a subprocess and streams the output. Anything about
 - **Use `Array.from()` on `select.options`, not spread.** Both work in a
   browser, but `Array.from` also accepts plain array-likes, which is what the
   headless render tests hand it.
+- **A 401 makes the page reload itself, once.** Every `start` mints a fresh
+  token, which silently invalidates open tabs — the calls 401 and the page
+  looks dead for no visible reason. `/` is served *without* authentication and
+  the token is stamped into the HTML on the way out, so a reload is a complete
+  fix. A `sessionStorage` flag stops a genuinely bad token from looping, and
+  any successful call clears it so the next restart can heal too. Do not
+  "solve" this by making the token survive restarts: it dying with the server
+  is the property that makes a leaked URL worthless.
+- **A client hanging up mid-response is not an error.** The reload above tears
+  down its own request, so `BrokenPipeError` is routine here. It is swallowed
+  in `_send` and in `Server.handle_error`; everything else still gets a full
+  trace. This matters because "does the log contain a traceback" is the
+  cheapest health check this server has, and routine noise there blinds it.
+- **`--tint` lives on `:root`, and drives more than the logo.** Both marks, the
+  header tabs, the Configuration controls and the About links read it, so the
+  chrome lights up as one. `TINTS` holds variable *names* rather than
+  `var(...)` wrappers because the favicon needs a literal colour — it is a file
+  on disk and cannot follow a CSS variable, so it is redrawn as a data URI from
+  the resolved value.
+- **Layout rules that were each a reported bug**: Actions and Help are fixed
+  four-column grids (auto-fit sized off a minimum and gave three, dropping
+  Teardown to a second row); group headers stack title over blurb with a
+  min-height, or the lists start at four different heights; `Recent runs` caps
+  at 11.6rem, about three rows, and must **not** carry `flex: 1` — that let it
+  grow to fill the block and quietly defeated the cap, stretching its
+  neighbour to match.
 - **Stdlib only, no build step.** No new entry in `requirements.txt`, no Node,
   no `node_modules`. The frontend has to stay as readable on GitHub as the
   rest of the repository.

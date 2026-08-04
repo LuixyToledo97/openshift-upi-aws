@@ -10,6 +10,14 @@ roles, which in turn drive Terraform and the OpenShift installer.
 else (`terraform.tfvars`, Ansible variables, `install-config.yaml`) is
 generated from it.
 
+It comes with **two front ends over the same engine**: the `ocplab` CLI, and a
+local **browser UI** (`ocplab web`) with a dashboard, a `cluster.yaml` editor
+that validates before you save, and every operation streaming its output live —
+including Terraform's and the OpenShift installer's own logs, which the CLI can
+only point you at in another terminal. The UI runs no logic of its own: it
+executes the same commands as subprocesses, so neither front end is the "real"
+one.
+
 This is not ROSA (managed by Red Hat) nor IPI (the installer creates the
 infrastructure). Here we control every AWS resource ourselves.
 
@@ -32,14 +40,15 @@ infrastructure). Here we control every AWS resource ourselves.
 2. [✅ Prerequisites](#2-prerequisites)
 3. [📁 Repository structure](#3-repository-structure)
 4. [⚙️ The `ocplab` CLI and `cluster.yaml`](#4-the-ocplab-cli-and-clusteryaml)
-5. [🧱 The Terraform files, explained](#5-the-terraform-files-explained)
-6. [🚀 Deploying the cluster](#6-deploying-the-cluster)
-7. [💣 Destroying the cluster](#7-destroying-the-cluster)
-8. [💰 Costs](#8-costs)
-9. [🛡️ Cost safety net](#9-cost-safety-net)
-10. [🔧 Troubleshooting and lessons learned](#10-troubleshooting-and-lessons-learned)
-11. [⚡ Quick reference](#11-quick-reference)
-12. [📚 References](#12-references)
+5. [🖥️ The web UI](#5--the-web-ui)
+6. [🧱 The Terraform files, explained](#6-the-terraform-files-explained)
+7. [🚀 Deploying the cluster](#7-deploying-the-cluster)
+8. [💣 Destroying the cluster](#8-destroying-the-cluster)
+9. [💰 Costs](#9-costs)
+10. [🛡️ Cost safety net](#10-cost-safety-net)
+11. [🔧 Troubleshooting and lessons learned](#11-troubleshooting-and-lessons-learned)
+12. [⚡ Quick reference](#12-quick-reference)
+13. [📚 References](#13-references)
 
 ---
 
@@ -91,7 +100,7 @@ infrastructure). Here we control every AWS resource ourselves.
 ⚠️ The last three are created by the `ingress-operator` **outside of
 Terraform**. They're why a raw `terraform destroy` fails if they aren't
 cleaned up first — `ocplab destroy` handles this automatically (see
-[section 7](#7-destroying-the-cluster)).
+[section 7](#8-destroying-the-cluster)).
 
 > **Design decision:** a single AZ and a single NAT Gateway to minimize
 > cost. There's no real high availability here — this is a lab, not
@@ -114,7 +123,7 @@ cleaned up first — `ocplab destroy` handles this automatically (see
 ```
 
 `ocplab deploy` automates steps 1 through 10 end to end — see
-[section 6](#6-deploying-the-cluster) for what it does at each stage and
+[section 6](#7-deploying-the-cluster) for what it does at each stage and
 how long each one takes.
 
 ---
@@ -387,7 +396,7 @@ have no other working AWS credentials — think carefully before using it.
 The pull secret **doesn't expire**. What expires (in 24h) are the
 Ignition certificates the installer generates — `ocplab ignition`
 regenerates them automatically when they're stale (see
-[section 6](#6-deploying-the-cluster)).
+[section 6](#7-deploying-the-cluster)).
 
 ### 2.5 🌐 Domain and DNS
 
@@ -681,92 +690,6 @@ behind and answer confidently about a config you no longer have. The
 generated files *are* the subject of the command, so `ocplab render
 --dry-run -v` shows the diff and writes nothing.
 
-### 🖥️ The web UI — `ocplab web`
-
-Everything the CLI does, in a browser: a dashboard, a `cluster.yaml` editor
-with live validation, and every operation with its output streaming as it
-happens.
-
-```bash
-source .venv/bin/activate
-./ocplab web start
-```
-
-It runs **in the background and gives you your shell back** — closing the
-terminal doesn't stop it. `ocplab web status` reprints the URL with its token,
-`ocplab web stop` shuts it down, and `--port` moves it off 8770.
-
-`start` checks its prerequisites first and **starts nothing if any are
-missing**, reporting all of them at once rather than one per attempt:
-
-```
-Cannot start the web UI — 2 problem(s):
-
-  - 'cluster.yaml' does not exist. Run 'ocplab init' (or 'ocplab init --minimal')
-    to create one — every view in the UI reads it.
-  - port 8770 on 127.0.0.1 is already in use. Stop whatever is listening, or
-    pick another with --port.
-
-Nothing was started.
-```
-
-It requires `cluster.yaml` to *exist*, but deliberately does not require it to
-be **valid** — the Configuration editor is how you fix a broken one, so
-refusing to start over a config error would lock you out of the tool that
-repairs it.
-
-**It is a second thin layer, not a second program.** The server never talks to
-AWS and never reads Terraform state — it runs `ocplab <command>` as a
-subprocess and shows you that command's own output. Whatever the CLI does, the
-UI does, because it *is* the CLI.
-
-Six views: **Overview** (status cards, live-state buttons, recent runs),
-**Actions** — grouped by how much damage each can do, and tinted to match —
-**Configuration** (the `cluster.yaml` editor), **Runs**, filterable by
-read-only versus changed-something and kept across restarts, **Help** with the
-workflows written out, and **About**.
-
-The output panel appears when you run something, docks to the bottom or the
-right, and is drag-resizable; it reserves space rather than covering the page,
-and remembers where you put it. Closing it never stops the run.
-
-Its dropdown switches what the panel is showing: the run's own output, or any
-log file being tailed live — including Terraform's resource-by-resource detail
-and the OpenShift installer's own log. During a deploy that is the difference
-between reading "terraform apply, 5m47s" and watching the resources appear,
-and it saves the second terminal the CLI otherwise sends you to.
-
-Three things worth knowing:
-
-- **It only ever listens on `127.0.0.1`, and there is no flag to change that.**
-  This server holds your AWS credentials and can create and destroy real
-  infrastructure. It also refuses any request whose `Host` header isn't
-  loopback, which stops a page you happen to be visiting from pointing a DNS
-  name at `127.0.0.1` and driving it through your browser. Every API call needs
-  a token that is minted fresh on each start, so the URL is not worth sharing —
-  it dies with the server.
-- **One operation at a time.** There is one cluster and one Terraform state;
-  two concurrent applies is how you corrupt it. Starting a second operation
-  while one runs is refused, with the reason.
-- **Closing the tab does not stop the run.** Output is kept server-side, so
-  reloading — or opening the page forty minutes into a deploy — replays
-  everything and then follows live. The durable record is still the plain-text
-  file per run under `logs/`, written by the Ansible callback and completely
-  independent of this UI.
-
-**`ocplab ssh` is not there**, and won't be: it hands the terminal over, which
-a browser has nowhere to put — and a web terminal would hand anyone who
-reached this server a root shell on your nodes. Run it from a shell. `env`,
-`init` and `setup` are absent too, for duller reasons the UI explains on the
-page.
-
-There is no build step and no new dependency: a stdlib HTTP server, and plain
-HTML, CSS and JavaScript you can read on GitHub. The two fonts it uses are
-bundled rather than fetched (176 KB, SIL Open Font License — see
-[`web/static/fonts/README.md`](web/static/fonts/README.md)), so it renders
-identically everywhere and works with no internet at all, which is plausibly
-the situation when the cluster you are fixing *is* the problem.
-
 ### 🎯 Which cluster `oc` talks to
 
 Pinning `openshift.version` makes `oc` the *right version*. It says nothing
@@ -855,7 +778,7 @@ bootstrap:
 
 openshift:
   # optional — 'ocplab render' auto-discovers it for platform.aws.region
-  # if omitted; set it explicitly only to pin a specific AMI (see §11)
+  # if omitted; set it explicitly only to pin a specific AMI (see §12)
   # rhcosAmi: ami-0123456789abcdef0
 
 credentials:
@@ -864,7 +787,7 @@ credentials:
 
 certificates:
   # optional — bring your own REAL, CA-signed certs for the API and
-  # *.apps (see §6.1). Not for self-signed certs.
+  # *.apps (see §7.1). Not for self-signed certs.
   # apiCertFile: ~/.ocplab/certs/ocp4lab-api.crt
   # apiKeyFile: ~/.ocplab/certs/ocp4lab-api.key
   # appsCertFile: ~/.ocplab/certs/ocp4lab-apps.crt
@@ -888,7 +811,95 @@ concrete error message per problem, not just the first one it finds.
 
 ---
 
-## 5. The Terraform files, explained
+## 5. 🖥️ The web UI
+
+Everything the CLI does, in a browser: a dashboard, a `cluster.yaml` editor
+with live validation, and every operation with its output streaming as it
+happens.
+
+```bash
+source .venv/bin/activate
+./ocplab web start
+```
+
+It runs **in the background and gives you your shell back** — closing the
+terminal doesn't stop it. `ocplab web status` reprints the URL with its token,
+`ocplab web stop` shuts it down, and `--port` moves it off 8770.
+
+`start` checks its prerequisites first and **starts nothing if any are
+missing**, reporting all of them at once rather than one per attempt:
+
+```
+Cannot start the web UI — 2 problem(s):
+
+  - 'cluster.yaml' does not exist. Run 'ocplab init' (or 'ocplab init --minimal')
+    to create one — every view in the UI reads it.
+  - port 8770 on 127.0.0.1 is already in use. Stop whatever is listening, or
+    pick another with --port.
+
+Nothing was started.
+```
+
+It requires `cluster.yaml` to *exist*, but deliberately does not require it to
+be **valid** — the Configuration editor is how you fix a broken one, so
+refusing to start over a config error would lock you out of the tool that
+repairs it.
+
+**It is a second thin layer, not a second program.** The server never talks to
+AWS and never reads Terraform state — it runs `ocplab <command>` as a
+subprocess and shows you that command's own output. Whatever the CLI does, the
+UI does, because it *is* the CLI.
+
+Six views: **Overview** (status cards, live-state buttons, recent runs),
+**Actions** — grouped by how much damage each can do, and tinted to match —
+**Configuration** (the `cluster.yaml` editor), **Runs**, filterable by
+read-only versus changed-something and kept across restarts, **Help** with the
+workflows written out, and **About**.
+
+The output panel appears when you run something, docks to the bottom or the
+right, and is drag-resizable; it reserves space rather than covering the page,
+and remembers where you put it. Closing it never stops the run.
+
+Its dropdown switches what the panel is showing: the run's own output, or any
+log file being tailed live — including Terraform's resource-by-resource detail
+and the OpenShift installer's own log. During a deploy that is the difference
+between reading "terraform apply, 5m47s" and watching the resources appear,
+and it saves the second terminal the CLI otherwise sends you to.
+
+Three things worth knowing:
+
+- **It only ever listens on `127.0.0.1`, and there is no flag to change that.**
+  This server holds your AWS credentials and can create and destroy real
+  infrastructure. It also refuses any request whose `Host` header isn't
+  loopback, which stops a page you happen to be visiting from pointing a DNS
+  name at `127.0.0.1` and driving it through your browser. Every API call needs
+  a token that is minted fresh on each start, so the URL is not worth sharing —
+  it dies with the server.
+- **One operation at a time.** There is one cluster and one Terraform state;
+  two concurrent applies is how you corrupt it. Starting a second operation
+  while one runs is refused, with the reason.
+- **Closing the tab does not stop the run.** Output is kept server-side, so
+  reloading — or opening the page forty minutes into a deploy — replays
+  everything and then follows live. The durable record is still the plain-text
+  file per run under `logs/`, written by the Ansible callback and completely
+  independent of this UI.
+
+**`ocplab ssh` is not there**, and won't be: it hands the terminal over, which
+a browser has nowhere to put — and a web terminal would hand anyone who
+reached this server a root shell on your nodes. Run it from a shell. `env`,
+`init` and `setup` are absent too, for duller reasons the UI explains on the
+page.
+
+There is no build step and no new dependency: a stdlib HTTP server, and plain
+HTML, CSS and JavaScript you can read on GitHub. The two fonts it uses are
+bundled rather than fetched (176 KB, SIL Open Font License — see
+[`web/static/fonts/README.md`](web/static/fonts/README.md)), so it renders
+identically everywhere and works with no internet at all, which is plausibly
+the situation when the cluster you are fixing *is* the problem.
+
+---
+
+## 6. The Terraform files, explained
 
 **Total: 60 resources.**
 
@@ -922,7 +933,7 @@ Three critical things:
 
 - **`kubernetes.io/cluster/<infraID> = owned`** — without this tag
   `aws-cloud-controller-manager` won't start and **the cluster never
-  completes** (see [10.1](#101--the-kubernetesioclusterinfraid-tag--main-root-cause)).
+  completes** (see [10.1](#111--the-kubernetesioclusterinfraid-tag--main-root-cause)).
 - **`infra_id` is read from `metadata.json`**, never typed by hand: the
   installer generates a different random suffix (`ocp4lab-rz2zm`,
   `ocp4lab-qbxhm`...) every time the Ignition configs are regenerated.
@@ -995,7 +1006,7 @@ HTTPS health checks: `/readyz` on 6443, `/healthz` on 22623.
 > VPC, that zone *shadows* the public DNS for its entire subtree
 > **inside** the VPC. If the private zone only had `*.apps`, the pods
 > would stop resolving `api-int` and `cluster-version-operator` would die.
-> This happened to us — see [10.3](#103-the-private-zone-shadows-the-public-one).
+> This happened to us — see [10.3](#113-the-private-zone-shadows-the-public-one).
 
 The `*.apps` record is **not** in Terraform: the ingress-operator creates
 it automatically in both zones.
@@ -1026,7 +1037,7 @@ A bucket policy allows the master and worker roles to read the object.
 - **RHCOS AMI** — specific to region and version. `ocplab render`
   auto-discovers it for `platform.aws.region` unless `cluster.yaml`'s
   `openshift.rhcosAmi` pins one explicitly (see
-  [section 11](#11-quick-reference)).
+  [section 11](#12-quick-reference)).
 - **`user_data`** — masters and workers receive `master.ign` / `worker.ign`
   directly (they're small: they just point to the Machine Config Server).
 - **Disks** — size/type configurable per node group in `cluster.yaml`
@@ -1034,7 +1045,7 @@ A bucket policy allows the master and worker roles to read the object.
 
 ---
 
-## 6. Deploying the cluster
+## 7. Deploying the cluster
 
 ### ⚡ The short version
 
@@ -1102,11 +1113,11 @@ about to become billable), then runs everything below unattended.
      INFO Login to the console with user: "kubeadmin", and password: "..."
      ```
    - Custom TLS certs for the API/`*.apps`, **if configured** — see
-     [§6.1](#61-custom-tls-certificates) below. Fully optional: skipped
+     [§7.1](#71-custom-tls-certificates) below. Fully optional: skipped
      with no error if `cluster.yaml`'s `certificates` paths don't have
      anything at them.
 
-### 6.1 Custom TLS certificates
+### 7.1 Custom TLS certificates
 
 OpenShift auto-generates its own self-signed certs for the external API
 (`api.<cluster>.<domain>`) and the default router (`*.apps.<cluster>.<domain>`).
@@ -1182,7 +1193,7 @@ oc patch schedulers.config.openshift.io cluster --type merge \
 
 ---
 
-## 7. Destroying the cluster
+## 8. Destroying the cluster
 
 > ⚠️ **Order matters.** The cluster creates AWS resources that Terraform
 > doesn't know about (the router ELB, its ENIs, its security group, and
@@ -1292,7 +1303,7 @@ aws route53 change-resource-record-sets \
   delete it you'll have to redo the NS delegation at your registrar.
 - IAM user `openshift-lab-terraform`.
 - The cost safety net (`ocplab safety-net` resources) — see
-  [section 9](#9-cost-safety-net).
+  [section 9](#10-cost-safety-net).
 - The domain itself, at whichever registrar it's on.
 
 ### ♻️ Recreating after a destroy
@@ -1344,7 +1355,7 @@ cluster on or off"; for cluster **health** (nodes, operators) that's still
 
 ---
 
-## 8. Costs
+## 9. Costs
 
 On-Demand prices for **eu-west-1** (Ireland). Approximate — check
 [calculator.aws](https://calculator.aws) for exact figures.
@@ -1434,7 +1445,7 @@ During installation the bootstrap (`m5.xlarge`) adds about 20 minutes:
 
 **The variable that controls spend is uptime, not the architecture.**
 Running `ocplab destroy` at the end of every session is what makes the
-difference — and the [safety net](#9-cost-safety-net) is what protects
+difference — and the [safety net](#10-cost-safety-net) is what protects
 you if you forget.
 
 ### 📌 Fixed permanent costs
@@ -1565,7 +1576,7 @@ problems.
 
 ---
 
-## 9. Cost safety net
+## 10. Cost safety net
 
 Three independent mechanisms, managed by **`ocplab safety-net`** but
 created **outside of Terraform on purpose**: that way they survive
@@ -1578,7 +1589,7 @@ forget everything else.
 ./ocplab safety-net destroy   # tear all three down (rarely needed — see below)
 ```
 
-### 9.1 🔔 AWS Budget with alerts
+### 10.1 🔔 AWS Budget with alerts
 
 Budget `openshift-lab-budget` for **50 USD/month** (configurable via
 `cluster.yaml`'s `safetyNet.budgetUsd`) with email alerts at **50%, 80%,
@@ -1589,7 +1600,7 @@ and 100%** to the addresses in `safetyNet.alertEmails`.
 > receiving anything means you haven't spent that much, not that it's
 > misconfigured.
 
-### 9.2 🚨 Budget Action — automatic lockdown at 80%
+### 10.2 🚨 Budget Action — automatic lockdown at 80%
 
 Once you go over 80%, AWS automatically attaches (`--approval-model
 AUTOMATIC`) the `openshift-lab-budget-lockdown` policy to the IAM user,
@@ -1608,7 +1619,7 @@ which **denies creating** expensive resources:
 **Limitation:** AWS billing isn't real-time (it can take hours to reflect
 spend). That's why the third mechanism exists.
 
-### 9.3 🔌 Killswitch — daily Lambda at 22:00 (Europe/Madrid)
+### 10.3 🔌 Killswitch — daily Lambda at 22:00 (Europe/Madrid)
 
 Lambda `openshift-lab-killswitch`, invoked by EventBridge Scheduler
 (`safetyNet.killswitch.schedule`/`timezone` in `cluster.yaml`), which
@@ -1641,12 +1652,12 @@ day to day, leave it running.
 
 ---
 
-## 10. Troubleshooting and lessons learned
+## 11. Troubleshooting and lessons learned
 
 The core issues that cost real debugging time. **All of them are already
 fixed in the code**, but it's worth understanding them.
 
-### 10.1 ⭐ The `kubernetes.io/cluster/<infraID>` tag — main root cause
+### 11.1 ⭐ The `kubernetes.io/cluster/<infraID>` tag — main root cause
 
 **Symptom:** the cluster gets stuck at
 `Working towards 4.22.6: 80 of 1015 done (7% complete)` for hours. Nodes
@@ -1682,7 +1693,7 @@ nothing gets scheduled → **total circular deadlock**.
 **Fix:** `default_tags` in `providers.tf` with the infraID read from
 `metadata.json`.
 
-### 10.2 🔍 etcd discovery via DNS
+### 11.2 🔍 etcd discovery via DNS
 
 **Symptom:** the masters never form quorum. No
 `/etc/kubernetes/manifests/etcd-pod.yaml`. `oc get machineconfig | grep etcd`
@@ -1699,7 +1710,7 @@ dig A etcd-0.ocp4lab.aws.example.com +short
 
 **Fix:** the `etcd_a` and `etcd_srv` resources in `route53.tf`.
 
-### 10.3 The private zone shadows the public one
+### 11.3 The private zone shadows the public one
 
 **Symptom:** after creating the private hosted zone to fix the ingress,
 `cluster-version-operator` goes into `CrashLoopBackOff`:
@@ -1723,7 +1734,7 @@ private zone too.
 oc debug node/<node> -- chroot /host dig +short api-int.ocp4lab.aws.example.com
 ```
 
-### 10.4 ⏳ Ignition certificates — expire after 24h
+### 11.4 ⏳ Ignition certificates — expire after 24h
 
 ```
 ERROR Bootstrap Ignition-Config Certificate aggregator-ca.crt expired at ...
@@ -1735,11 +1746,11 @@ WARNING Please regenerate ignition configuration files in a new directory.
 old `install-dir`'s internal state is what makes the installer reuse
 expired certificates) — this is automatic in `ocplab deploy`.
 
-### 10.5 🛑 `control-plane-machine-set` stuck `Degraded`
+### 11.5 🛑 `control-plane-machine-set` stuck `Degraded`
 
 Normal in UPI: there are no `Machine` objects for the masters (Terraform
 created them). Blocks `wait-for install-complete` — the `finalize` role
-deletes it automatically; see [section 6](#6-deploying-the-cluster).
+deletes it automatically; see [section 6](#7-deploying-the-cluster).
 
 ---
 
@@ -1847,7 +1858,7 @@ watch -n 30 'oc get clusterversion; echo; oc get co | grep -v "True.*False.*Fals
 
 ---
 
-## 11. Quick reference
+## 12. Quick reference
 
 ### 🆕 Deploy from scratch
 
@@ -1906,7 +1917,7 @@ cd terraform && terraform apply -auto-approve
 
 ---
 
-## 12. References
+## 13. References
 
 - [OpenShift Container Platform documentation](https://docs.redhat.com/en/documentation/openshift_container_platform)
 - [openshift/installer — AWS IAM permissions](https://github.com/openshift/installer/blob/main/docs/user/aws/iam.md)

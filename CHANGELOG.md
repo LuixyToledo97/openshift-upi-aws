@@ -8,7 +8,6 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-
 - `ocplab web start|stop|status`: a browser UI for the lab — dashboard, a
   `cluster.yaml` editor with live validation, and every operation with its
   output streaming as it runs.
@@ -70,6 +69,17 @@ uses [Semantic Versioning](https://semver.org/).
   CSS and JavaScript. The two fonts (Inter and JetBrains Mono, 176 KB, SIL
   Open Font License) are bundled rather than fetched, so it renders the same
   everywhere and needs no internet.
+
+  The favicon follows the same tint as the marks — redrawn as a data URI, since
+  a file on disk cannot track a CSS variable — and so do the header tabs, the
+  Configuration controls and the About links.
+
+  Restarting the server no longer costs you the tab. Every start mints a new
+  token, which used to invalidate open pages in silence; a 401 now reloads
+  once, which is a complete fix because `/` is served without authentication
+  and the current token is stamped into the page on the way out. The token
+  still dies with the server — that is what makes a leaked URL worthless — it
+  just no longer takes your session with it.
 
 - `ocplab status --json`, the same information as the text output in a
   machine-readable shape. Written for the web dashboard, useful for anything
@@ -297,7 +307,6 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-
 - `destroy` no longer spends five minutes waiting for the router ELB to delete
   itself. Measured on a real teardown: the poll ran all thirty attempts (364s,
   half of a 12m10s destroy) and the manual-delete fallback then removed it in
@@ -321,6 +330,12 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A client hanging up mid-response logged a full `BrokenPipeError` traceback.
+  It is routine rather than exceptional — a tab that receives a 401 reloads
+  itself and tears down its own request — and the noise mattered because "does
+  the log contain a traceback" is the cheapest health check the web server has.
+  Dropped connections are swallowed now; everything else still gets a full
+  trace.
 
 - Long `until`/`retries` waits produced no output at all when nothing was
   attached to a terminal. Each attempt went to the log file only, and the
