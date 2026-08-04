@@ -343,6 +343,10 @@ function renderOverview(payload) {
   }
 }
 
+/* These go through run() like every other action, and their output lands in
+   the one output panel. An earlier version rendered them inline in a second
+   console on this page, which put the same text in two places at once and
+   left you wondering which one to read. */
 function renderLiveActions() {
   const host = $("liveActions");
   host.textContent = "";
@@ -351,31 +355,8 @@ function renderLiveActions() {
     if (!command) continue;
     const btn = el("button", "btn btn-sm", command.label);
     btn.title = command.desc;
-    btn.addEventListener("click", () => runLive(command));
+    btn.addEventListener("click", () => run(command));
     host.append(btn);
-  }
-}
-
-async function runLive(command) {
-  const out = $("liveOut");
-  out.textContent = `Running ${command.label}…`;
-  try {
-    const job = await api("/api/run", { method: "POST", body: JSON.stringify({ command: command.id }) });
-    out.textContent = "";
-    // Same stream as everything else, rendered inline: these are short, and the
-    // answer is the point rather than the progress.
-    const src = new EventSource(`/api/jobs/${encodeURIComponent(job.id)}/stream?token=${encodeURIComponent(TOKEN)}`);
-    src.onmessage = (ev) => {
-      const data = JSON.parse(ev.data);
-      if (data.line !== undefined && !data.line.startsWith("$ ")) {
-        out.append(document.createTextNode(data.line + "\n"));
-        out.scrollTop = out.scrollHeight;
-      }
-      if (data.done) { src.close(); refresh(); }
-    };
-    src.onerror = () => src.close();
-  } catch (err) {
-    out.textContent = err.message;
   }
 }
 

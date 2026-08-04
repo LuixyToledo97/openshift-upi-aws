@@ -257,14 +257,7 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 .block-head h3 { font-size: 1rem; }
 .block-head p { color: var(--muted); font-size: .8rem; margin-top: .15rem; }
 
-.chiprow { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .85rem; }
-.live-out {
-  background: var(--sunken); border: 1px solid var(--border);
-  border-radius: var(--r); padding: .8rem .9rem;
-  font-family: var(--mono); font-size: 11.8px; line-height: 1.6;
-  white-space: pre-wrap; word-break: break-word;
-  max-height: 250px; overflow: auto;
-}
+.chiprow { display: flex; flex-wrap: wrap; gap: .4rem; }
 
 .runline {
   display: flex; align-items: center; justify-content: space-between;
