@@ -252,8 +252,3 @@ planned — a good starting point if you're looking for something to pick up.
 ## 📄 License
 
 MIT — see [LICENSE](LICENSE).
-
-<sub>The mark lives at [`docs/assets/ocplab-logo.svg`](docs/assets/ocplab-logo.svg);
-[`social-preview.png`](docs/assets/social-preview.png) is the 1280×640 tile for
-GitHub's repository preview, which is uploaded under **Settings → Social
-preview** rather than read from the tree.</sub>
