@@ -531,6 +531,29 @@ runs `ocplab <command>` as a subprocess and streams the output. Anything about
   that payload is local and instant, which is what makes polling it safe —
   live state (`verify`, `cost`, `power status`) stays behind explicit buttons,
   because those cost an AWS round trip and two of them cost money.
+- **`[hidden] { display: none !important; }` in `style.css` is load-bearing.**
+  A class that sets `display` beats the browser's own `[hidden]` rule on
+  specificity, so `.panel-out`/`.runchip` marked `hidden` stayed on screen.
+  That single line was the cause of four separate reported bugs: the output
+  panel covering the page on every tab, Actions/Configuration/Runs being
+  impossible to scroll, a "Running" chip that never cleared, and its Open
+  button doing nothing (the job id it reads is only set while something runs).
+- **The output panel reserves space, it does not overlay.** Opening it sets
+  `--pad-bottom`/`--pad-right` on `<body>` to its own size, so the page gives
+  up real estate instead of being covered. Overlaying is what made three views
+  unscrollable. It is dockable bottom/right and drag-resizable, clamped so it
+  can never take the whole viewport, and the preference lives in
+  `localStorage`.
+- **Sizes in the UI use binary units, like `human_size()` in the CLI.**
+  Decimal units put "1.7 GB" on the dashboard beside "1.6 GB" from `ocplab
+  status` for the same bytes, which reads as a bug in one of them.
+- **Fonts are bundled, not fetched** (`web/static/fonts/`, ~176 KB, SIL OFL —
+  attribution in that directory's README, and it is a licence condition, not
+  politeness). The UI must look the same everywhere and work with no internet,
+  which is plausibly the situation when the cluster you are fixing *is* the
+  problem. `_serve_static` therefore checks path *containment* rather than
+  parent equality — the earlier check silently 404'd anything in a
+  subdirectory.
 - **Stdlib only, no build step.** No new entry in `requirements.txt`, no Node,
   no `node_modules`. The frontend has to stay as readable on GitHub as the
   rest of the repository.

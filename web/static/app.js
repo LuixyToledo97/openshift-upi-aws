@@ -6,9 +6,10 @@
 
 const TOKEN = window.OCPLAB_TOKEN;
 const $ = (id) => document.getElementById(id);
+const STORE = "ocplab.panel";
 
-/* Groups, in the order they escalate. The blurb is the promise each one makes
-   about how much damage it can do, which is the thing worth knowing first. */
+/* Groups in the order they escalate. The blurb is the promise each makes about
+   how much damage it can do, which is what you want to know first. */
 const GROUPS = [
   ["inspect", "Inspect", "Read-only. Safe at any time."],
   ["prepare", "Prepare", "Writes files, or creates the one-time AWS prerequisites."],
@@ -16,13 +17,13 @@ const GROUPS = [
   ["danger", "Teardown", "Destructive, and not reversible."],
 ];
 
-/* Live state is fetched on demand rather than polled: each of these costs an
-   AWS round trip, and two of them cost money to answer. */
+/* Fetched on demand, never polled: each costs a round trip to AWS. */
 const LIVE = ["verify", "cost", "power-status", "console"];
 
-let state = { commands: [], excluded: {}, recent: [] };
+let state = { commands: [], excluded: {}, recent: [], about: {} };
 let stream = null;
 let attached = null;
+let runFilter = "all";
 
 /* ── transport ─────────────────────────────────────────────── */
 
@@ -37,12 +38,12 @@ async function api(path, options = {}) {
 }
 
 function toast(message, kind) {
-  const el = $("toast");
-  el.textContent = message;
-  el.className = "toast" + (kind ? ` is-${kind}` : "");
-  el.hidden = false;
+  const box = $("toast");
+  box.textContent = message;
+  box.className = "toast" + (kind ? ` is-${kind}` : "");
+  box.hidden = false;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { el.hidden = true; }, kind === "bad" ? 9000 : 3800);
+  toast._t = setTimeout(() => { box.hidden = true; }, kind === "bad" ? 9000 : 3800);
 }
 
 const el = (tag, className, text) => {
@@ -52,16 +53,184 @@ const el = (tag, className, text) => {
   return node;
 };
 
+const isSafe = (job) => job.group === "inspect";
+const resultText = (job) => job.running ? "running" : job.exit_code === 0 ? "ok" : `exit ${job.exit_code}`;
+
+/* ── output panel: dockable, resizable, and never in the way ── */
+
+const panel = {
+  get dock() { return $("outPanel").dataset.dock; },
+
+  load() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch { /* first run */ }
+    $("outPanel").dataset.dock = saved.dock === "right" ? "right" : "bottom";
+    this.size(saved.size || 320);
+  },
+
+  save() {
+    try {
+      localStorage.setItem(STORE, JSON.stringify({
+        dock: this.dock,
+        size: parseInt(getComputedStyle(document.documentElement).getPropertyValue("--panel-size"), 10),
+      }));
+    } catch { /* private browsing; the panel just won't remember */ }
+  },
+
+  size(px) {
+    const axis = this.dock === "right" ? window.innerWidth : window.innerHeight;
+    const clamped = Math.max(160, Math.min(px, axis - 140));
+    document.documentElement.style.setProperty("--panel-size", `${clamped}px`);
+    this.reserve();
+  },
+
+  /* The page gives up real estate rather than being covered. Overlaying is
+     what made Actions, Configuration and Runs impossible to scroll. */
+  reserve() {
+    const open = !$("outPanel").hidden;
+    const size = open ? getComputedStyle(document.documentElement).getPropertyValue("--panel-size") : "0px";
+    const side = this.dock === "right" && window.innerWidth > 900;
+    document.body.style.setProperty("--pad-bottom", side ? "0px" : size);
+    document.body.style.setProperty("--pad-right", side ? size : "0px");
+  },
+
+  toggleDock() {
+    const next = this.dock === "bottom" ? "right" : "bottom";
+    $("outPanel").dataset.dock = next;
+    $("dockBtn").title = next === "bottom" ? "Dock to the right" : "Dock to the bottom";
+    $("dockBtn").textContent = next === "bottom" ? "⇥" : "⤓";
+    this.size(next === "right" ? 460 : 320);
+    this.save();
+  },
+
+  open() { $("outPanel").hidden = false; this.reserve(); },
+
+  close() {
+    $("outPanel").hidden = true;
+    this.reserve();
+    if (stream) { stream.close(); stream = null; }
+    attached = null;
+  },
+
+  bindResize() {
+    const bar = $("resizer");
+    const start = (ev) => {
+      ev.preventDefault();
+      document.body.classList.add("is-resizing");
+      const move = (e) => {
+        const point = e.touches ? e.touches[0] : e;
+        this.size(this.dock === "right"
+          ? window.innerWidth - point.clientX
+          : window.innerHeight - point.clientY);
+      };
+      const stop = () => {
+        document.body.classList.remove("is-resizing");
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("touchmove", move);
+        document.removeEventListener("mouseup", stop);
+        document.removeEventListener("touchend", stop);
+        this.save();
+      };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("touchmove", move, { passive: false });
+      document.addEventListener("mouseup", stop);
+      document.addEventListener("touchend", stop);
+    };
+    bar.addEventListener("mousedown", start);
+    bar.addEventListener("touchstart", start, { passive: false });
+    window.addEventListener("resize", () => this.reserve());
+  },
+};
+
+/* ── console ───────────────────────────────────────────────── */
+
+function classify(line) {
+  if (line.startsWith("$ ")) return "cmdline";
+  if (line.startsWith("---")) return "end";
+  if (/\b(FAILED|ERROR|error:|failed|fatal|Traceback)\b/.test(line)) return "bad";
+  if (/\b(warning|WARNING|NOT\b|Cancelled)\b/.test(line)) return "warn";
+  if (/\b(ok:|healthy|Ready|complete|succeeded|valid)\b/.test(line)) return "good";
+  return null;
+}
+
+function appendLine(text) {
+  const box = $("console");
+  const node = el("span", classify(text) || null);
+  // textContent, never innerHTML: output with angle brackets in it is routine.
+  node.textContent = text + "\n";
+  box.append(node);
+  if ($("follow").checked) box.scrollTop = box.scrollHeight;
+}
+
+function openOutput(job, { fresh } = {}) {
+  panel.open();
+  if (stream) { stream.close(); stream = null; }
+  if (fresh || attached !== job.id) $("console").textContent = "";
+  attached = job.id;
+
+  $("panelTitle").textContent = job.label + (job.dry_run ? " (dry run)" : "");
+  $("panelSub").textContent = job.running ? "running…" : resultText(job);
+  $("cancelBtn").hidden = !job.running;
+
+  stream = new EventSource(`/api/jobs/${encodeURIComponent(job.id)}/stream?token=${encodeURIComponent(TOKEN)}`);
+  stream.onmessage = (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.line !== undefined) return appendLine(data.line);
+    if (data.done) {
+      appendLine(data.exit_code === 0
+        ? "--- finished successfully ---"
+        : `--- finished with exit code ${data.exit_code} ---`);
+      $("panelSub").textContent = data.exit_code === 0 ? "finished" : `exit ${data.exit_code}`;
+      $("cancelBtn").hidden = true;
+      stream.close(); stream = null;
+      refresh();
+    }
+  };
+  stream.onerror = () => { if (stream) { stream.close(); stream = null; } };
+}
+
 /* ── overview ──────────────────────────────────────────────── */
 
-function card(label, value, { note, pill, mono } = {}) {
+function card(label, value, { note, pill, mono, extra } = {}) {
   const box = el("div", "card");
   box.append(el("div", "card-label", label));
   box.append(el("div", "card-value" + (mono ? " mono" : ""), value));
   if (pill) box.append(el("span", `pill ${pill[0]}`, pill[1]));
+  if (extra) box.append(extra);
   if (note) box.append(el("div", "card-note", note));
   return box;
 }
+
+function versionsCard(o) {
+  const list = el("div", "verlist");
+  for (const v of o.cache) {
+    const pinned = v.version === o.pinned;
+    const row = el("div", "verrow" + (pinned ? " is-pinned" : ""));
+    row.append(el("span", null, v.version), el("span", null, pinned ? "pinned" : bytes(v.size)));
+    list.append(row);
+  }
+  const pinnedMissing = o.pinned && !o.downloaded;
+  return card(
+    "OpenShift",
+    o.pinned || "not pinned",
+    {
+      pill: o.pinned
+        ? (o.downloaded ? ["ok", "downloaded"] : ["warn", "not downloaded"])
+        : ["info", "using your PATH"],
+      extra: o.cache.length ? list : undefined,
+      note: pinnedMissing
+        ? "Run Versions to fetch it."
+        : (o.cache.length ? `${o.cache_total_human} cached in ${o.cache_dir}` : null),
+    },
+  );
+}
+
+// Binary units, matching human_size() in the CLI. Decimal units here would put
+// "1.7 GB" on the dashboard next to "1.6 GB" from `ocplab status` for the same
+// bytes, and someone would reasonably conclude one of them is broken.
+const bytes = (n) => n >= 1024 ** 3
+  ? `${(n / 1024 ** 3).toFixed(1)} GB`
+  : `${Math.round(n / 1024 ** 2)} MB`;
 
 function renderOverview(payload) {
   const banner = $("configBanner");
@@ -72,23 +241,17 @@ function renderOverview(payload) {
     banner.hidden = false;
     banner.textContent = payload.error || "cluster.yaml could not be read.";
     $("clusterName").textContent = "No valid cluster.yaml";
-    $("clusterSub").textContent = "Fix it under Configuration";
+    $("clusterSub").textContent = "Fix it under Configuration.";
     return;
   }
   banner.hidden = true;
 
   const s = payload.status;
   $("clusterName").textContent = `${s.cluster.name}.${s.cluster.base_domain}`;
-  $("clusterSub").textContent = `${s.cluster.region} · ${s.cluster.control_plane} control plane + ${s.cluster.compute} compute`;
+  $("clusterSub").textContent =
+    `${s.cluster.region} · ${s.cluster.control_plane} control plane + ${s.cluster.compute} compute`;
 
-  host.append(card(
-    "OpenShift",
-    s.openshift.pinned || "not pinned",
-    s.openshift.pinned
-      ? { pill: s.openshift.downloaded ? ["ok", "downloaded"] : ["warn", "not downloaded"],
-          note: s.openshift.downloaded ? null : "Run Versions to fetch it." }
-      : { pill: ["info", "PATH"], note: "Using whatever openshift-install/oc your PATH finds." },
-  ));
+  host.append(versionsCard(s.openshift));
 
   host.append(card(
     "Terraform state",
@@ -110,20 +273,14 @@ function renderOverview(payload) {
       : { note: "Run Ignition to generate it." },
   ));
 
-  host.append(card(
-    "oc points at",
-    s.kubeconfig.points_here ? "this cluster" : (s.kubeconfig.current ? "another cluster" : "~/.kube/config"),
-    s.kubeconfig.points_here
-      ? { pill: ["ok", "correct"] }
-      : { pill: ["warn", "not this cluster"],
-          note: 'Activate the venv, or run: eval "$(ocplab env)"' },
-  ));
-
-  if (s.openshift.cache.length) {
+  // Only surfaced when it is wrong. Reporting "correct" every time is noise;
+  // reporting it when your oc would hit another cluster is the whole point.
+  if (!s.kubeconfig.points_here) {
     host.append(card(
-      "Binary cache",
-      s.openshift.cache_total_human,
-      { note: `${s.openshift.cache.map((v) => v.version).join(", ")} in ${s.openshift.cache_dir}` },
+      "oc is pointing elsewhere",
+      s.kubeconfig.current ? "another kubeconfig" : "~/.kube/config",
+      { pill: ["warn", "not this cluster"],
+        note: 'Activate the venv, or run: eval "$(ocplab env)"' },
     ));
   }
 }
@@ -147,8 +304,8 @@ async function runLive(command) {
   try {
     const job = await api("/api/run", { method: "POST", body: JSON.stringify({ command: command.id }) });
     out.textContent = "";
-    // Same stream as everything else, rendered inline instead of in the drawer:
-    // these are short and the answer is the point, not the progress.
+    // Same stream as everything else, rendered inline: these are short, and the
+    // answer is the point rather than the progress.
     const src = new EventSource(`/api/jobs/${encodeURIComponent(job.id)}/stream?token=${encodeURIComponent(TOKEN)}`);
     src.onmessage = (ev) => {
       const data = JSON.parse(ev.data);
@@ -168,21 +325,18 @@ function renderRecent() {
   const host = $("recentRuns");
   host.textContent = "";
   const runs = (state.recent || []).slice(0, 6);
-  if (!runs.length) { host.append(el("span", "empty", "No runs yet.")); return; }
+  if (!runs.length) { host.append(el("span", "empty", "Nothing has run yet.")); return; }
   for (const job of runs) {
     const line = el("div", "runline");
     const left = el("div");
     left.append(el("b", null, job.label + (job.dry_run ? " (dry run)" : "")));
     left.append(el("div", "when", `${new Date(job.started * 1000).toLocaleTimeString()} · ${resultText(job)}`));
     const btn = el("button", "btn btn-quiet btn-sm", "Output");
-    btn.addEventListener("click", () => openDrawer(job));
+    btn.addEventListener("click", () => openOutput(job));
     line.append(left, btn);
     host.append(line);
   }
 }
-
-const resultText = (job) =>
-  job.running ? "running" : job.exit_code === 0 ? "ok" : `exit ${job.exit_code}`;
 
 /* ── actions ───────────────────────────────────────────────── */
 
@@ -205,9 +359,7 @@ function renderActions() {
     section.append(head, grid);
     host.append(section);
   }
-
-  const notes = Object.entries(state.excluded)
-    .map(([name, why]) => `ocplab ${name} — ${why}`).join("\n");
+  const notes = Object.entries(state.excluded).map(([n, w]) => `ocplab ${n} — ${w}`).join("\n");
   $("excluded").textContent = notes ? `Not available here:\n${notes}` : "";
 }
 
@@ -219,7 +371,7 @@ async function run(command) {
       method: "POST",
       body: JSON.stringify({ command: command.id, dry_run: dryRun }),
     });
-    openDrawer(job, { fresh: true });
+    openOutput(job, { fresh: true });
   } catch (err) {
     toast(err.message, "bad");
   }
@@ -235,52 +387,122 @@ function confirmDialog(command) {
     dlg.addEventListener("close", () => resolve(dlg.returnValue === "ok"), { once: true }));
 }
 
-/* ── output drawer ─────────────────────────────────────────── */
+/* ── runs ──────────────────────────────────────────────────── */
 
-function classify(line) {
-  if (line.startsWith("$ ")) return "cmdline";
-  if (line.startsWith("---")) return "end";
-  if (/\b(FAILED|ERROR|error:|failed|fatal|Traceback)\b/.test(line)) return "bad";
-  if (/\b(warning|WARNING|NOT\b|Cancelled)\b/.test(line)) return "warn";
-  if (/\b(ok:|healthy|Ready|complete|succeeded|valid)\b/.test(line)) return "good";
-  return null;
+function renderRuns() {
+  const body = $("runsTable").querySelector("tbody");
+  body.textContent = "";
+  const runs = (state.recent || []).filter((j) =>
+    runFilter === "all" || (runFilter === "safe" ? isSafe(j) : !isSafe(j)));
+
+  $("runsEmpty").hidden = runs.length > 0;
+  $("runsTable").hidden = runs.length === 0;
+
+  for (const job of runs) {
+    const tr = el("tr");
+    const duration = job.finished
+      ? `${Math.round(job.finished - job.started)}s`
+      : `${Math.round(Date.now() / 1000 - job.started)}s…`;
+    const kind = el("td");
+    kind.append(el("span", `tag ${isSafe(job) ? "safe" : "changed"}`,
+      isSafe(job) ? "read-only" : (job.dry_run ? "preview" : "changed")));
+    tr.append(
+      el("td", null, job.label + (job.dry_run ? " (dry run)" : "")),
+      kind,
+      el("td", null, new Date(job.started * 1000).toLocaleTimeString()),
+      el("td", null, duration),
+      el("td", null, resultText(job)),
+    );
+    const last = el("td");
+    const btn = el("button", "btn btn-quiet btn-sm", "Output");
+    btn.addEventListener("click", () => openOutput(job));
+    last.append(btn);
+    tr.append(last);
+    body.append(tr);
+  }
 }
 
-function appendLine(text) {
-  const box = $("console");
-  const node = el("span", classify(text) || null);
-  // textContent, never innerHTML: command output containing angle brackets is
-  // routine rather than exceptional.
-  node.textContent = text + "\n";
-  box.append(node);
-  if ($("follow").checked) box.scrollTop = box.scrollHeight;
+/* ── about ─────────────────────────────────────────────────── */
+
+function renderAbout() {
+  const a = state.about || {};
+  $("brandVersion").textContent = a.version ? `v${a.version}` : "";
+  $("aboutVersion").textContent = a.version ? `v${a.version}` : "";
+  $("aboutTagline").textContent = a.tagline || "";
+  $("aboutFonts").textContent = a.fonts || "";
+
+  const grid = $("aboutGrid");
+  grid.textContent = "";
+  for (const [term, value] of [
+    ["Version", a.version || "unknown"],
+    ["Licence", `${a.license} — free to use, modify and redistribute`],
+    ["Author", a.author],
+    ["GitHub", `@${a.github_user}`],
+  ]) {
+    if (!value) continue;
+    grid.append(el("dt", null, term), el("dd", null, value));
+  }
+
+  const links = $("aboutLinks");
+  links.textContent = "";
+  for (const [label, href, primary] of [
+    ["View the repository", a.repo_url, true],
+    [`@${a.github_user} on GitHub`, a.github_url, false],
+  ]) {
+    if (!href) continue;
+    const link = el("a", "btn" + (primary ? " btn-primary" : ""), label);
+    link.href = href;
+    link.target = "_blank";
+    // noopener: the page being opened must not get a handle back to this one,
+    // which is a local server holding AWS credentials.
+    link.rel = "noopener noreferrer";
+    links.append(link);
+  }
 }
 
-function openDrawer(job, { fresh } = {}) {
-  $("drawer").hidden = false;
-  if (stream) { stream.close(); stream = null; }
-  if (fresh || attached !== job.id) $("console").textContent = "";
-  attached = job.id;
+/* ── shell ─────────────────────────────────────────────────── */
 
-  $("drawerTitle").textContent = job.label + (job.dry_run ? " (dry run)" : "");
-  $("drawerSub").textContent = job.running ? "running…" : resultText(job);
-  $("cancelBtn").hidden = !job.running;
+function switchView(name) {
+  document.querySelectorAll(".viewbtn").forEach((b) => b.classList.toggle("is-active", b.dataset.view === name));
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("is-active", v.id === `view-${name}`));
+  if (name === "runs") renderRuns();
+}
 
-  stream = new EventSource(`/api/jobs/${encodeURIComponent(job.id)}/stream?token=${encodeURIComponent(TOKEN)}`);
-  stream.onmessage = (ev) => {
-    const data = JSON.parse(ev.data);
-    if (data.line !== undefined) return appendLine(data.line);
-    if (data.done) {
-      appendLine(data.exit_code === 0
-        ? "--- finished successfully ---"
-        : `--- finished with exit code ${data.exit_code} ---`);
-      $("drawerSub").textContent = data.exit_code === 0 ? "finished" : `exit ${data.exit_code}`;
-      $("cancelBtn").hidden = true;
-      stream.close(); stream = null;
-      refresh();
+function setLive(job) {
+  const chip = $("runChip");
+  const running = job && job.running;
+  chip.hidden = !running;
+  if (running) {
+    $("runChipLabel").textContent = job.label + (job.dry_run ? " (dry run)" : "");
+    chip.dataset.job = job.id;
+  }
+  document.title = running ? `▶ ${job.label} — ocplab` : "ocplab";
+  document.querySelectorAll(".action").forEach((b) => { b.disabled = !!running; });
+}
+
+async function refresh() {
+  try {
+    const next = await api("/api/state");
+    state = { ...state, ...next };
+    renderActions();
+    renderLiveActions();
+    renderRecent();
+    renderAbout();
+    setLive(next.current);
+    if (document.querySelector('.viewbtn[data-view="runs"]').classList.contains("is-active")) renderRuns();
+    // Reattaching after a reload is why the lines live server-side: a deploy
+    // started twenty minutes ago picks up exactly where it was.
+    if (next.current && next.current.running && attached !== next.current.id) {
+      openOutput(next.current, { fresh: true });
     }
-  };
-  stream.onerror = () => { if (stream) { stream.close(); stream = null; } };
+  } catch (err) {
+    toast(`Lost contact with the server: ${err.message}`, "bad");
+  }
+  try {
+    renderOverview(await api("/api/overview"));
+  } catch (err) {
+    renderOverview({ ok: false, error: err.message });
+  }
 }
 
 /* ── configuration ─────────────────────────────────────────── */
@@ -331,86 +553,26 @@ async function saveConfig() {
   }
 }
 
-/* ── shell ─────────────────────────────────────────────────── */
-
-function switchView(name) {
-  document.querySelectorAll(".viewbtn").forEach((b) => b.classList.toggle("is-active", b.dataset.view === name));
-  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("is-active", v.id === `view-${name}`));
-  if (name === "runs") renderRuns();
-}
-
-function renderRuns() {
-  const body = $("runsTable").querySelector("tbody");
-  body.textContent = "";
-  const runs = state.recent || [];
-  $("runsEmpty").hidden = runs.length > 0;
-  $("runsTable").hidden = runs.length === 0;
-  for (const job of runs) {
-    const tr = el("tr");
-    const duration = job.finished
-      ? `${Math.round(job.finished - job.started)}s`
-      : `${Math.round(Date.now() / 1000 - job.started)}s…`;
-    tr.append(
-      el("td", null, job.label + (job.dry_run ? " (dry run)" : "")),
-      el("td", null, new Date(job.started * 1000).toLocaleTimeString()),
-      el("td", null, duration),
-      el("td", null, resultText(job)),
-    );
-    const td = el("td");
-    const btn = el("button", "btn btn-quiet btn-sm", "Output");
-    btn.addEventListener("click", () => openDrawer(job));
-    td.append(btn);
-    tr.append(td);
-    body.append(tr);
-  }
-}
-
-function setLive(job) {
-  const chip = $("liveChip");
-  const running = job && job.running;
-  chip.hidden = !running;
-  if (running) $("liveLabel").textContent = job.label + (job.dry_run ? " (dry run)" : "");
-  document.title = running ? `▶ ${job.label} — ocplab` : "ocplab";
-  document.querySelectorAll(".action").forEach((b) => { b.disabled = !!running; });
-  chip.dataset.job = running ? job.id : "";
-}
-
-async function refresh() {
-  try {
-    const next = await api("/api/state");
-    state = { ...state, ...next };
-    renderActions();
-    renderLiveActions();
-    renderRecent();
-    setLive(next.current);
-    if (document.querySelector('.viewbtn[data-view="runs"]').classList.contains("is-active")) renderRuns();
-    // Reattaching after a reload is why the lines live server-side: a deploy
-    // started twenty minutes ago picks up exactly where it was.
-    if (next.current && next.current.running && attached !== next.current.id) {
-      openDrawer(next.current, { fresh: true });
-    }
-  } catch (err) {
-    toast(`Lost contact with the server: ${err.message}`, "bad");
-  }
-  try {
-    renderOverview(await api("/api/overview"));
-  } catch (err) {
-    renderOverview({ ok: false, error: err.message });
-  }
-}
+/* ── init ──────────────────────────────────────────────────── */
 
 function init() {
+  panel.load();
+  panel.bindResize();
+
   document.querySelectorAll(".viewbtn").forEach((b) =>
     b.addEventListener("click", () => switchView(b.dataset.view)));
+  document.querySelectorAll("#runFilter .seg").forEach((b) =>
+    b.addEventListener("click", () => {
+      runFilter = b.dataset.filter;
+      document.querySelectorAll("#runFilter .seg").forEach((x) => x.classList.toggle("is-active", x === b));
+      renderRuns();
+    }));
 
-  $("drawerClose").addEventListener("click", () => {
-    $("drawer").hidden = true;
-    if (stream) { stream.close(); stream = null; }
-    attached = null;
-  });
-  $("liveOpen").addEventListener("click", () => {
-    const job = state.recent.find((j) => j.id === $("liveChip").dataset.job);
-    if (job) openDrawer(job);
+  $("panelClose").addEventListener("click", () => panel.close());
+  $("dockBtn").addEventListener("click", () => panel.toggleDock());
+  $("runChip").addEventListener("click", () => {
+    const job = (state.recent || []).find((j) => j.id === $("runChip").dataset.job);
+    if (job) openOutput(job);
   });
   $("cancelBtn").addEventListener("click", async () => {
     if (!attached) return;

@@ -5,57 +5,77 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>ocplab</title>
+  <link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
+<!-- The mark: three nodes on a hexagon. The hexagon is the shape every
+     Kubernetes-adjacent thing wears, and the three dots are the control plane
+     this project is actually about — a quorum, drawn as one. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="logo" viewBox="0 0 32 32">
+    <path d="M16 2.6 27.6 9.3v13.4L16 29.4 4.4 22.7V9.3z"
+          fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linejoin="round" opacity=".55"/>
+    <circle cx="16" cy="11" r="2.9" fill="currentColor"/>
+    <circle cx="10.6" cy="20.3" r="2.9" fill="currentColor" opacity=".78"/>
+    <circle cx="21.4" cy="20.3" r="2.9" fill="currentColor" opacity=".78"/>
+  </symbol>
+</svg>
+
 <header class="topbar">
-  <div class="identity">
-    <div class="mark" aria-hidden="true">◇</div>
-    <div>
-      <h1 id="clusterName">—</h1>
-      <p class="sub" id="clusterSub">reading cluster.yaml…</p>
-    </div>
+  <div class="brand">
+    <span class="brand-mark"><svg width="26" height="26"><use href="#logo"/></svg></span>
+    <span class="brand-name">ocplab</span>
+    <span class="brand-ver" id="brandVersion"></span>
   </div>
+
   <div class="topbar-right">
-    <div class="live" id="liveChip" hidden>
-      <span class="spinner" aria-hidden="true"></span>
-      <span id="liveLabel">Running</span>
-      <button class="link" id="liveOpen">Open</button>
-    </div>
+    <button class="runchip" id="runChip" hidden>
+      <span class="runchip-dot" aria-hidden="true"></span>
+      <span id="runChipLabel">Running</span>
+    </button>
     <nav class="viewnav">
       <button class="viewbtn is-active" data-view="overview">Overview</button>
       <button class="viewbtn" data-view="actions">Actions</button>
       <button class="viewbtn" data-view="config">Configuration</button>
       <button class="viewbtn" data-view="runs">Runs</button>
+      <button class="viewbtn" data-view="about">About</button>
     </nav>
   </div>
 </header>
 
-<main>
+<main id="main">
 
   <!-- ── Overview ─────────────────────────────────────────────── -->
   <section class="view is-active" id="view-overview">
-    <div class="banner" id="configBanner" hidden></div>
+    <div class="view-head">
+      <div>
+        <h2 id="clusterName">—</h2>
+        <p class="muted" id="clusterSub">reading cluster.yaml…</p>
+      </div>
+    </div>
 
+    <div class="banner" id="configBanner" hidden></div>
     <div class="cards" id="statusCards"></div>
 
     <div class="split">
       <div class="block">
         <div class="block-head">
-          <h2>Live state</h2>
-          <p>Costs time and money to fetch, so it is asked for, never polled.</p>
+          <h3>Live state</h3>
+          <p>Each of these costs a round trip to AWS, so it is asked for, never polled.</p>
         </div>
-        <div class="live-actions" id="liveActions"></div>
+        <div class="chiprow" id="liveActions"></div>
         <div class="live-out" id="liveOut"><span class="empty">Nothing fetched yet.</span></div>
       </div>
 
       <div class="block">
         <div class="block-head">
-          <h2>Recent runs</h2>
+          <h3>Recent runs</h3>
           <p>This session. The durable record is one file per run in <code>logs/</code>.</p>
         </div>
-        <div id="recentRuns"><span class="empty">No runs yet.</span></div>
+        <div id="recentRuns"><span class="empty">Nothing has run yet.</span></div>
       </div>
     </div>
   </section>
@@ -65,7 +85,7 @@
     <div class="view-head">
       <div>
         <h2>Actions</h2>
-        <p class="muted">Every one of these runs the CLI command of the same name and streams its output.</p>
+        <p class="muted">Each one runs the CLI command of the same name and streams its output.</p>
       </div>
       <label class="switch" title="Maps to ocplab --dry-run">
         <input type="checkbox" id="dryRun">
@@ -97,9 +117,7 @@
       <textarea id="configEditor" spellcheck="false" autocomplete="off" autocorrect="off"
         placeholder="Paste your cluster.yaml here, or start from one of the templates."></textarea>
       <div class="editor-side">
-        <div id="validationBox" class="validation">
-          <span class="empty">Not validated yet.</span>
-        </div>
+        <div id="validationBox" class="validation"><span class="empty">Not validated yet.</span></div>
         <p class="note">
           Validation runs against what is in the editor, not the saved file — so you can
           check a config before overwriting a working one. Saving keeps the previous
@@ -114,33 +132,55 @@
     <div class="view-head">
       <div>
         <h2>Runs</h2>
-        <p class="muted">Output is kept server-side: closing this tab does not stop anything.</p>
+        <p class="muted">Output is kept server-side: closing a panel never stops a run.</p>
+      </div>
+      <div class="segmented" id="runFilter">
+        <button class="seg is-active" data-filter="all">All</button>
+        <button class="seg" data-filter="safe">Read-only</button>
+        <button class="seg" data-filter="changed">Changed something</button>
       </div>
     </div>
     <table class="table" id="runsTable">
-      <thead><tr><th>Operation</th><th>Started</th><th>Duration</th><th>Result</th><th></th></tr></thead>
+      <thead><tr><th>Operation</th><th>Kind</th><th>Started</th><th>Duration</th><th>Result</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
-    <p class="empty" id="runsEmpty">Nothing has run in this session yet.</p>
+    <p class="empty" id="runsEmpty">Nothing matches.</p>
+  </section>
+
+  <!-- ── About ────────────────────────────────────────────────── -->
+  <section class="view" id="view-about">
+    <div class="about">
+      <div class="about-mark"><svg width="64" height="64"><use href="#logo"/></svg></div>
+      <h2>ocplab <span class="about-ver" id="aboutVersion"></span></h2>
+      <p class="about-tagline" id="aboutTagline"></p>
+
+      <dl class="about-grid" id="aboutGrid"></dl>
+
+      <div class="about-links" id="aboutLinks"></div>
+
+      <p class="note" id="aboutFonts"></p>
+    </div>
   </section>
 
 </main>
 
-<!-- ── Output drawer ──────────────────────────────────────────── -->
-<div class="drawer" id="drawer" hidden>
-  <div class="drawer-head">
-    <div>
-      <h3 id="drawerTitle">Output</h3>
-      <p class="muted small" id="drawerSub"></p>
+<!-- ── Output panel: dockable, resizable, hidden until something runs ── -->
+<aside class="panel-out" id="outPanel" hidden data-dock="bottom">
+  <div class="resizer" id="resizer" title="Drag to resize"></div>
+  <div class="panel-head">
+    <div class="panel-title">
+      <strong id="panelTitle">Output</strong>
+      <span class="panel-sub" id="panelSub"></span>
     </div>
-    <div class="row">
+    <div class="panel-tools">
       <label class="check"><input type="checkbox" id="follow" checked> Follow</label>
-      <button class="btn btn-quiet" id="cancelBtn" hidden>Cancel run</button>
-      <button class="btn btn-quiet" id="drawerClose" title="The run carries on">Close</button>
+      <button class="icon" id="dockBtn" title="Dock to the right">⇥</button>
+      <button class="btn btn-quiet btn-sm" id="cancelBtn" hidden>Cancel</button>
+      <button class="icon" id="panelClose" title="Close — the run carries on">✕</button>
     </div>
   </div>
   <pre class="console" id="console"></pre>
-</div>
+</aside>
 
 <dialog id="confirmDialog" class="dialog">
   <form method="dialog">

@@ -36,8 +36,17 @@ uses [Semantic Versioning](https://semver.org/).
   (nodes, operators, power, cost) stays behind explicit actions, because those
   cost time and money and should be asked for.
 
+  The output panel appears when something runs, docks bottom or right, and is
+  drag-resizable. It reserves space rather than overlaying, so the page below
+  stays scrollable — an overlay made three views unusable in an earlier
+  revision. Runs can be filtered by whether an operation was read-only or
+  actually changed something, and About carries the version, the licence and
+  the author's links.
+
   No new dependency and no build step: a stdlib HTTP server, plus plain HTML,
-  CSS and JavaScript.
+  CSS and JavaScript. The two fonts (Inter and JetBrains Mono, 176 KB, SIL
+  Open Font License) are bundled rather than fetched, so it renders the same
+  everywhere and needs no internet.
 
 - `ocplab status --json`, the same information as the text output in a
   machine-readable shape. Written for the web dashboard, useful for anything

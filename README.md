@@ -700,6 +700,15 @@ AWS and never reads Terraform state — it runs `ocplab <command>` as a
 subprocess and shows you that command's own output. Whatever the CLI does, the
 UI does, because it *is* the CLI.
 
+Five views: **Overview** (status cards, live-state buttons, recent runs),
+**Actions**, **Configuration** (the `cluster.yaml` editor), **Runs** — filterable
+by whether an operation was read-only or actually changed something — and
+**About**.
+
+The output panel appears when you run something, docks to the bottom or the
+right, and is drag-resizable; it reserves space rather than covering the page,
+and remembers where you put it. Closing it never stops the run.
+
 Three things worth knowing:
 
 - **It only ever listens on `127.0.0.1`, and there is no flag to change that.**
@@ -725,7 +734,11 @@ reached this server a root shell on your nodes. Run it from a shell. `env`,
 page.
 
 There is no build step and no new dependency: a stdlib HTTP server, and plain
-HTML, CSS and JavaScript you can read on GitHub.
+HTML, CSS and JavaScript you can read on GitHub. The two fonts it uses are
+bundled rather than fetched (176 KB, SIL Open Font License — see
+[`web/static/fonts/README.md`](web/static/fonts/README.md)), so it renders
+identically everywhere and works with no internet at all, which is plausibly
+the situation when the cluster you are fixing *is* the problem.
 
 ### 🎯 Which cluster `oc` talks to
 

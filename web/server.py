@@ -138,6 +138,19 @@ COMMANDS = [
 
 COMMANDS_BY_ID = {c["id"]: c for c in COMMANDS}
 
+# Shown in the About panel. Read from the CLI rather than hardcoded, so the
+# version cannot drift from `ocplab --version`; the rest is repository fact.
+ABOUT = {
+    "name": "ocplab",
+    "tagline": "OpenShift 4 on AWS with user-provisioned infrastructure.",
+    "license": "MIT",
+    "author": "Luis Garcia",
+    "github_user": "LuixyToledo97",
+    "github_url": "https://github.com/LuixyToledo97",
+    "repo_url": "https://github.com/LuixyToledo97/openshift-upi-aws",
+    "fonts": "Inter and JetBrains Mono, bundled under the SIL Open Font License 1.1.",
+}
+
 # `ocplab ssh` is deliberately absent and stays absent: it hands the terminal
 # over with execvp, which a browser has nowhere to put. Wiring a web terminal
 # to it would also hand whoever reached this server a root shell on the nodes,
@@ -226,6 +239,9 @@ class Job:
             "id": self.id,
             "command": self.command["id"],
             "label": self.command["label"],
+            # Carried so the runs list can separate read-only operations from
+            # the ones that changed something, without re-deriving it client-side.
+            "group": self.command["group"],
             "dry_run": self.dry_run,
             "running": self.running,
             "exit_code": self.exit_code,
@@ -383,6 +399,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, {
                 "commands": COMMANDS,
                 "excluded": EXCLUDED,
+                "about": {**ABOUT, "version": self.server.cli_version},
                 "repo": str(REPO_ROOT),
                 "config_exists": (REPO_ROOT / "cluster.yaml").exists(),
                 "current": RUNNER.current.as_dict() if RUNNER.current else None,
@@ -448,13 +465,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _serve_static(self, path, params):
         name = "index.html" if path == "/" else path[len("/static/"):]
         target = (STATIC_DIR / name).resolve()
-        if target.parent != STATIC_DIR.resolve() or not target.is_file():
+        # Containment, not parent equality: the fonts live in a subdirectory,
+        # and requiring the parent to *be* STATIC_DIR quietly 404s them. What
+        # matters is that the resolved path stays inside, which is still what
+        # stops ../ from escaping.
+        if not target.is_file() or STATIC_DIR.resolve() not in target.parents:
             self._send(404, b"not found", "text/plain")
             return
         ctype = {
             ".html": "text/html; charset=utf-8",
             ".js": "text/javascript; charset=utf-8",
             ".css": "text/css; charset=utf-8",
+            ".woff2": "font/woff2",
+            ".svg": "image/svg+xml",
+            ".md": "text/plain; charset=utf-8",
         }.get(target.suffix, "application/octet-stream")
         data = target.read_bytes()
         if name == "index.html":
@@ -604,6 +628,27 @@ class Server(http.server.ThreadingHTTPServer):
     def __init__(self, addr, token):
         super().__init__(addr, Handler)
         self.token = token
+        self.cli_version = read_cli_version()
+
+
+def read_cli_version():
+    """`ocplab --version`, asked once at startup.
+
+    Read rather than hardcoded so About cannot drift from the CLI, and asked
+    once rather than per request because it cannot change while the server is
+    up — the file it comes from would have to be edited underneath it.
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(OCPLAB), "--version"],
+            cwd=str(REPO_ROOT), env=child_env(), text=True, timeout=15,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip().split()[-1]
+    except (OSError, subprocess.TimeoutExpired, IndexError):
+        pass
+    return "unknown"
 
 
 def serve(port=8770, open_browser=True):
