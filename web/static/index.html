@@ -10,17 +10,24 @@
 </head>
 <body>
 
-<!-- The mark: three nodes on a hexagon. The hexagon is the shape every
-     Kubernetes-adjacent thing wears, and the three dots are the control plane
-     this project is actually about — a quorum, drawn as one. -->
+<!-- The mark.
+     A hexagonal ring drawn as three identical arcs with gaps between them —
+     three because that is what a control plane is, separate because that is
+     what user-provisioned means: you place each piece. The gaps also make the
+     ring read as something that comes apart and goes back together, which is
+     the whole loop this tool automates.
+     The centre node is the cluster the three converge on.
+     Uniform stroke weight and no opacity tricks: the previous mark leaned on
+     three different opacities and read as muddy rather than as deliberate. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="logo" viewBox="0 0 32 32">
-    <path d="M16 2.6 27.6 9.3v13.4L16 29.4 4.4 22.7V9.3z"
-          fill="none" stroke="currentColor" stroke-width="2"
-          stroke-linejoin="round" opacity=".55"/>
-    <circle cx="16" cy="11" r="2.9" fill="currentColor"/>
-    <circle cx="10.6" cy="20.3" r="2.9" fill="currentColor" opacity=".78"/>
-    <circle cx="21.4" cy="20.3" r="2.9" fill="currentColor" opacity=".78"/>
+    <g fill="none" stroke="currentColor" stroke-width="2.1"
+       stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.2 4.3 8.1 7.2a2.4 2.4 0 0 0-1.2 2.1v5.9"/>
+      <path d="M6.9 20.5v2.2a2.4 2.4 0 0 0 1.2 2.1l5.1 2.9a2.4 2.4 0 0 0 2.4 0l2.6-1.5"/>
+      <path d="M21.2 24.4l2.7-1.5a2.4 2.4 0 0 0 1.2-2.1V9.3a2.4 2.4 0 0 0-1.2-2.1l-5.1-2.9a2.4 2.4 0 0 0-2.4 0"/>
+    </g>
+    <circle cx="16" cy="16" r="3.1" fill="currentColor"/>
   </symbol>
 </svg>
 
@@ -41,6 +48,7 @@
       <button class="viewbtn" data-view="actions">Actions</button>
       <button class="viewbtn" data-view="config">Configuration</button>
       <button class="viewbtn" data-view="runs">Runs</button>
+      <button class="viewbtn" data-view="help">Help</button>
       <button class="viewbtn" data-view="about">About</button>
     </nav>
   </div>
@@ -72,9 +80,11 @@
       <div class="block">
         <div class="block-head">
           <h3>Recent runs</h3>
-          <p>This session. The durable record is one file per run in <code>logs/</code>.</p>
+          <p>Kept across restarts. The durable record is one file per run in <code>logs/</code>.</p>
         </div>
-        <div id="recentRuns"><span class="empty">Nothing has run yet.</span></div>
+        <!-- Scrolls inside its own box. Letting it grow pushed the page down
+             and made the main view scroll, which an overview should never do. -->
+        <div class="scrollbox" id="recentRuns"><span class="empty">Nothing has run yet.</span></div>
       </div>
     </div>
   </section>
@@ -139,11 +149,24 @@
         <button class="seg" data-filter="changed">Changed something</button>
       </div>
     </div>
-    <table class="table" id="runsTable">
-      <thead><tr><th>Operation</th><th>Kind</th><th>Started</th><th>Duration</th><th>Result</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <p class="empty" id="runsEmpty">Nothing matches.</p>
+    <div class="scrollbox tall">
+      <table class="table" id="runsTable">
+        <thead><tr><th>Operation</th><th>Kind</th><th>Started</th><th>Duration</th><th>Result</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="empty" id="runsEmpty">Nothing matches.</p>
+    </div>
+  </section>
+
+  <!-- ── Help ─────────────────────────────────────────────────── -->
+  <section class="view" id="view-help">
+    <div class="view-head">
+      <div>
+        <h2>How to use this</h2>
+        <p class="muted">Every step below is an action on the Actions tab, and the same command on the CLI.</p>
+      </div>
+    </div>
+    <div class="help" id="helpContent"></div>
   </section>
 
   <!-- ── About ────────────────────────────────────────────────── -->

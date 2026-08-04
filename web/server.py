@@ -54,83 +54,83 @@ LOGS_DIR = REPO_ROOT / "logs"
 # every entry that has one is run with --yes.
 COMMANDS = [
     {
-        "id": "status", "argv": ["status"], "label": "Status", "group": "inspect",
+        "id": "status", "argv": ["status"], "label": "Status", "group": "inspect", "tone": "neutral",
         "desc": "Local summary: pinned version, where oc points, install-dir age.",
     },
     {
-        "id": "validate", "argv": ["validate"], "label": "Validate", "group": "inspect",
+        "id": "validate", "argv": ["validate"], "label": "Validate", "group": "inspect", "tone": "neutral",
         "desc": "Check cluster.yaml, reporting every error rather than the first.",
     },
     {
-        "id": "prereqs", "argv": ["prereqs"], "label": "Prerequisites", "group": "inspect",
+        "id": "prereqs", "argv": ["prereqs"], "label": "Prerequisites", "group": "inspect", "tone": "neutral",
         "desc": "Static checklist — needs neither cluster.yaml nor AWS.",
     },
     {
-        "id": "preflight", "argv": ["preflight"], "label": "Preflight", "group": "inspect",
+        "id": "preflight", "argv": ["preflight"], "label": "Preflight", "group": "inspect", "tone": "neutral",
         "desc": "Read-only: binaries, AWS credentials, pull secret, DNS, AMI.",
     },
     {
-        "id": "verify", "argv": ["verify"], "label": "Verify", "group": "inspect",
+        "id": "verify", "argv": ["verify"], "label": "Verify", "group": "inspect", "tone": "neutral",
         "desc": "Live health: API, ClusterVersion, nodes, ClusterOperators.",
     },
     {
-        "id": "cost", "argv": ["cost"], "label": "Cost", "group": "inspect",
+        "id": "cost", "argv": ["cost"], "label": "Cost", "group": "inspect", "tone": "neutral",
         "desc": "Approximate USD/hour for what is actually deployed right now.",
     },
     {
-        "id": "console", "argv": ["console"], "label": "Console", "group": "inspect",
+        "id": "console", "argv": ["console"], "label": "Console", "group": "inspect", "tone": "neutral",
         "desc": "Console URL and the kubeadmin password.",
     },
     {
-        "id": "power-status", "argv": ["power", "status"], "label": "Power status", "group": "inspect",
+        "id": "power-status", "argv": ["power", "status"], "label": "Power status", "group": "inspect", "tone": "neutral",
         "desc": "Read-only check of whether the nodes are running or stopped.",
     },
     {
-        "id": "versions", "argv": ["versions", "list"], "label": "Versions", "group": "inspect",
+        "id": "versions", "argv": ["versions", "list"], "label": "Versions", "group": "inspect", "tone": "neutral",
         "desc": "What the mirror publishes and what is in the local cache.",
     },
 
     {
-        "id": "render", "argv": ["render"], "label": "Render", "group": "prepare",
+        "id": "render", "argv": ["render"], "label": "Render", "group": "prepare", "tone": "neutral",
         "desc": "cluster.yaml to terraform.tfvars + generated.yml.",
     },
     {
-        "id": "ignition", "argv": ["ignition"], "label": "Ignition", "group": "prepare",
+        "id": "ignition", "argv": ["ignition"], "label": "Ignition", "group": "prepare", "tone": "neutral",
         "desc": "Generate install-dir and the Ignition configs.",
     },
     {
-        "id": "bootstrap", "argv": ["bootstrap", "apply"], "label": "Bootstrap AWS", "group": "prepare",
+        "id": "bootstrap", "argv": ["bootstrap", "apply"], "label": "Bootstrap AWS", "group": "prepare", "tone": "warn",
         "confirm": "Creates the IAM user, public hosted zone and SSH keypair in AWS. Continue?",
         "desc": "The one-time AWS prerequisites preflight cannot create itself.",
     },
 
     {
-        "id": "deploy", "argv": ["deploy"], "label": "Deploy", "group": "operate",
+        "id": "deploy", "argv": ["deploy"], "label": "Deploy", "group": "operate", "tone": "accent",
         "confirm": "This creates real AWS infrastructure and starts billing immediately. Continue?",
         "desc": "render, ignition, terraform apply, wait for boot, finalize.",
     },
     {
-        "id": "repair", "argv": ["repair"], "label": "Repair workers", "group": "operate",
+        "id": "repair", "argv": ["repair"], "label": "Repair workers", "group": "operate", "tone": "warn",
         "confirm": "Runs terraform apply against the running cluster. It refuses any plan that is not add-only. Continue?",
         "desc": "Recreate workers that vanished, approve their CSRs, prune dead Nodes.",
     },
     {
-        "id": "power-off", "argv": ["power", "off"], "label": "Power off", "group": "operate",
+        "id": "power-off", "argv": ["power", "off"], "label": "Power off", "group": "operate", "tone": "danger",
         "confirm": "Cordons, drains and stops every node. EBS, NAT and load balancers keep billing while off. Continue?",
         "desc": "Graceful shutdown — an alternative to destroy, not a cost saving.",
     },
     {
-        "id": "power-on", "argv": ["power", "on"], "label": "Power on", "group": "operate",
+        "id": "power-on", "argv": ["power", "on"], "label": "Power on", "group": "operate", "tone": "ok",
         "confirm": "Starts the nodes again and approves their CSRs. Continue?",
         "desc": "Bring a powered-off cluster back.",
     },
     {
-        "id": "safety-net", "argv": ["safety-net", "apply"], "label": "Safety net", "group": "operate",
+        "id": "safety-net", "argv": ["safety-net", "apply"], "label": "Safety net", "group": "operate", "tone": "ok",
         "confirm": "Creates the budget, budget action and killswitch Lambda. Continue?",
         "desc": "Cost safety net, managed outside Terraform.",
     },
     {
-        "id": "destroy", "argv": ["destroy"], "label": "Destroy", "group": "danger",
+        "id": "destroy", "argv": ["destroy"], "label": "Destroy", "group": "danger", "tone": "danger",
         "confirm": "This tears down the entire cluster and everything in it. This cannot be undone. Continue?",
         "desc": "Ordered teardown of the whole cluster.",
     },
@@ -226,6 +226,13 @@ class Job:
         self.id = job_id
         self.command = command
         self.dry_run = dry_run
+        # Filled from the CLI's own "Log: <path>" line. This is the one place
+        # anything here reads structure out of command output, and it earns the
+        # exception: it is how a run recorded by an earlier server can still
+        # show its output. The alternative — guessing the newest file in logs/
+        # — races, and recomputing the name would mean reimplementing
+        # log_path_for(), which belongs to the CLI.
+        self.log_file = None
         self.lines = []
         self.exit_code = None
         self.started = time.time()
@@ -235,6 +242,8 @@ class Job:
         self._subscribers = []
 
     def add_line(self, text):
+        if self.log_file is None and text.startswith("Log: "):
+            self.log_file = Path(text[5:].strip()).name
         with self._lock:
             self.lines.append(text)
             for q in self._subscribers:
@@ -270,6 +279,7 @@ class Job:
             "id": self.id,
             "command": self.command["id"],
             "label": self.command["label"],
+            "log_file": self.log_file,
             # Carried so the runs list can separate read-only operations from
             # the ones that changed something, without re-deriving it client-side.
             "group": self.command["group"],
@@ -280,6 +290,13 @@ class Job:
             "finished": self.finished,
             "line_count": len(self.lines),
         }
+
+
+# History that outlives the process. Only metadata — the *output* of a past run
+# already lives in its own file under logs/, written by the Ansible callback and
+# owned by it, so duplicating it here would create a second copy to keep in step.
+RUNS_INDEX = LOGS_DIR / "runs.json"
+RUNS_KEPT = 100
 
 
 class Runner:
@@ -295,6 +312,42 @@ class Runner:
         self._jobs = {}
         self._current = None
         self._counter = 0
+        self._history = self._load_history()
+
+    @staticmethod
+    def _load_history():
+        try:
+            data = json.loads(RUNS_INDEX.read_text())
+        except (OSError, ValueError):
+            return []  # first run, or a file we can't read — history is a nicety
+        records = []
+        for record in data:
+            if not isinstance(record, dict) or "id" not in record:
+                continue
+            if record.get("running"):
+                # Recorded as running by a server that is no longer here, so
+                # how it ended is genuinely unknown. Saying "interrupted" is
+                # honest; leaving it "running" forever would be a lie the UI
+                # would then have to keep telling.
+                record = dict(record, running=False, exit_code=None, interrupted=True)
+            records.append(record)
+        return records[-RUNS_KEPT:]
+
+    def _save_history(self):
+        """Best-effort, like the run logs themselves.
+
+        Losing the index costs you a list; failing a job because the list
+        couldn't be written would be absurd.
+        """
+        live = [j.as_dict() for j in self._jobs.values()]
+        seen = {r["id"] for r in live}
+        merged = [r for r in self._history if r["id"] not in seen] + live
+        merged.sort(key=lambda r: r["started"])
+        try:
+            LOGS_DIR.mkdir(exist_ok=True)
+            RUNS_INDEX.write_text(json.dumps(merged[-RUNS_KEPT:], indent=1))
+        except OSError:
+            pass
 
     @property
     def current(self):
@@ -303,8 +356,16 @@ class Runner:
     def get(self, job_id):
         return self._jobs.get(job_id)
 
-    def recent(self, limit=20):
-        return sorted(self._jobs.values(), key=lambda j: j.started, reverse=True)[:limit]
+    def recent(self, limit=60):
+        """This session's jobs first, then whatever earlier servers recorded.
+
+        A job from a previous server has no lines in memory — nobody kept them.
+        It carries `log_file` instead, and the UI tails that, which is the same
+        content from the copy that was always the durable one.
+        """
+        live = {j.id: j.as_dict() for j in self._jobs.values()}
+        past = [dict(r, historical=True) for r in self._history if r["id"] not in live]
+        return sorted(list(live.values()) + past, key=lambda r: r["started"], reverse=True)[:limit]
 
     def start(self, command, dry_run):
         with self._lock:
@@ -314,10 +375,14 @@ class Runner:
                     "Only one operation can run at a time."
                 )
             self._counter += 1
-            job = Job(f"job-{self._counter}", command, dry_run)
+            # Millisecond-stamped rather than a plain counter: the counter
+            # restarts with the process, and history from an earlier server
+            # would then collide with this one's ids.
+            job = Job(f"job-{int(time.time() * 1000)}", command, dry_run)
             self._jobs[job.id] = job
             self._current = job
 
+        self._save_history()
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return job
 
@@ -350,6 +415,7 @@ class Runner:
         finally:
             proc.stdout.close()
             job.finish(proc.wait())
+            self._save_history()
 
     def cancel(self, job):
         if job.proc and job.running:

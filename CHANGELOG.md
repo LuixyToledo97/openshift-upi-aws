@@ -56,9 +56,14 @@ uses [Semantic Versioning](https://semver.org/).
   OpenShift installer's log included; the CLI can only point you at those in
   another terminal.
 
-  Runs can be filtered by whether an operation was read-only or actually
-  changed something, and About carries the version, the licence and the
-  author's links.
+  Actions are vertical lists with their descriptions folded behind a chevron,
+  each row tinted by how much damage it can do — red destroys, amber changes
+  something you may not get back, green restores. Runs can be filtered by
+  read-only versus changed-something, and **survive a restart of the server**:
+  `logs/runs.json` keeps the metadata, and a run from an earlier server replays
+  from its own log file rather than from lines nobody kept. A Help tab carries
+  the workflows — first-time setup, deploy, day-to-day, teardown — and About
+  the version, licence and author's links.
 
   No new dependency and no build step: a stdlib HTTP server, plus plain HTML,
   CSS and JavaScript. The two fonts (Inter and JetBrains Mono, 176 KB, SIL

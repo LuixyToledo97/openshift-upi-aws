@@ -720,10 +720,11 @@ AWS and never reads Terraform state — it runs `ocplab <command>` as a
 subprocess and shows you that command's own output. Whatever the CLI does, the
 UI does, because it *is* the CLI.
 
-Five views: **Overview** (status cards, live-state buttons, recent runs),
-**Actions**, **Configuration** (the `cluster.yaml` editor), **Runs** — filterable
-by whether an operation was read-only or actually changed something — and
-**About**.
+Six views: **Overview** (status cards, live-state buttons, recent runs),
+**Actions** — grouped by how much damage each can do, and tinted to match —
+**Configuration** (the `cluster.yaml` editor), **Runs**, filterable by
+read-only versus changed-something and kept across restarts, **Help** with the
+workflows written out, and **About**.
 
 The output panel appears when you run something, docks to the bottom or the
 right, and is drag-resizable; it reserves space rather than covering the page,

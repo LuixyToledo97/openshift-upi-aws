@@ -605,6 +605,29 @@ runs `ocplab <command>` as a subprocess and streams the output. Anything about
   running job is what gets suppressed instead, and only while a log is on
   screen: yanking the panel away from a log someone chose to watch is worse
   than not reattaching.
+- **Run history survives a restart; run *output* is not duplicated to achieve
+  it.** `logs/runs.json` holds metadata only, because the output already lives
+  in one file per run under `logs/` and a second copy would be a second thing
+  to keep in step. A job from an earlier server is flagged `historical` and the
+  UI tails its `log_file` instead of a stream that no longer exists. That
+  filename comes from parsing the CLI's own `Log: <path>` line — the one place
+  anything here reads structure out of command output, and it earns the
+  exception: guessing the newest file races, and recomputing the name would
+  mean reimplementing `log_path_for()`, which belongs to the CLI.
+- **Job ids are millisecond-stamped, not a counter.** A counter restarts with
+  the process and collides with the history the previous one wrote.
+- **Every list that can grow lives in a `.scrollbox`.** Letting Recent runs
+  grow pushed the page down and made the Overview itself scroll, which an
+  overview must never do.
+- **Action rows carry a `tone`, and it is a warning system rather than
+  decoration**: red destroys, amber changes something you may not get back,
+  green restores. It lives in `COMMANDS` beside `group` so there is one place
+  to look. Descriptions are collapsed behind a chevron, and the chevron is a
+  *separate* control from the row that runs the command — one button that both
+  explains and fires is a button people hesitate over.
+- **Use `Array.from()` on `select.options`, not spread.** Both work in a
+  browser, but `Array.from` also accepts plain array-likes, which is what the
+  headless render tests hand it.
 - **Stdlib only, no build step.** No new entry in `requirements.txt`, no Node,
   no `node_modules`. The frontend has to stay as readable on GitHub as the
   rest of the repository.

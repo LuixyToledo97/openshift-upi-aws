@@ -148,13 +148,20 @@ code, kbd { font-family: var(--mono); font-size: .87em; }
 }
 
 .brand { display: flex; align-items: center; gap: .6rem; }
-.brand-mark {
+.brand-mark, .about-mark {
+  /* --tint is re-rolled by JS on every hover. The default keeps it on-brand
+     when nothing has hovered it yet. */
+  --tint: var(--accent);
   display: grid; place-items: center;
-  width: 38px; height: 38px; border-radius: 11px;
-  background: linear-gradient(145deg, var(--accent), var(--accent-2));
+  background: linear-gradient(145deg, var(--tint), color-mix(in srgb, var(--tint) 55%, var(--accent-2)));
   color: #fff;
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: background .35s ease, box-shadow .35s ease, transform .2s ease;
 }
+.brand-mark {
+  width: 38px; height: 38px; border-radius: 11px;
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--tint) 40%, transparent);
+}
+.brand-mark:hover { transform: translateY(-1px); box-shadow: 0 5px 20px color-mix(in srgb, var(--tint) 60%, transparent); }
 .brand-name { font-size: 1.06rem; font-weight: 680; letter-spacing: -.028em; }
 .brand-ver {
   font-family: var(--mono); font-size: .68rem; font-weight: 500;
@@ -248,6 +255,9 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 
 /* ── blocks ────────────────────────────────────────────────── */
 
+.scrollbox { max-height: 264px; overflow-y: auto; overscroll-behavior: contain; }
+.scrollbox.tall { max-height: min(60vh, 620px); }
+
 .split { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
 .block {
   background: var(--raised); border: 1px solid var(--border);
@@ -274,23 +284,55 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 .agroup-head h3 { font-size: .96rem; }
 .agroup-head span { color: var(--faint); font-size: .8rem; }
 
-.agrid { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fill, minmax(262px, 1fr)); }
-.action {
-  text-align: left; cursor: pointer; font: inherit;
-  background: var(--raised); color: var(--text);
+.actlist {
   border: 1px solid var(--border); border-radius: var(--r);
-  padding: .9rem 1rem;
-  display: flex; flex-direction: column; gap: .25rem;
-  transition: border-color .12s, transform .12s, box-shadow .12s;
+  background: var(--raised); overflow: hidden; box-shadow: var(--shadow);
 }
-.action:hover:not(:disabled) {
-  border-color: var(--accent); transform: translateY(-2px); box-shadow: var(--shadow);
+
+/* Each row carries its tone as a left edge and a dot. Colour here is a
+   warning system, not decoration: red is "this destroys", amber is "this
+   changes something you may not get back", green is "this restores". */
+.act-item { border-bottom: 1px solid var(--border); }
+.act-item:last-child { border-bottom: 0; }
+.act-item[data-tone="neutral"] { --tone: var(--faint); }
+.act-item[data-tone="accent"]  { --tone: var(--accent); }
+.act-item[data-tone="ok"]      { --tone: var(--ok); }
+.act-item[data-tone="warn"]    { --tone: var(--warn); }
+.act-item[data-tone="danger"]  { --tone: var(--danger); }
+
+.act-row { display: flex; align-items: stretch; }
+
+.act-main {
+  flex: 1; display: flex; align-items: center; gap: .65rem;
+  border: 0; background: none; color: var(--text); font: inherit;
+  text-align: left; cursor: pointer;
+  padding: .7rem .9rem; border-left: 3px solid transparent;
+  transition: background .12s, border-color .12s;
 }
-.action:disabled { opacity: .42; cursor: not-allowed; }
-.action b { font-weight: 630; font-size: .94rem; }
-.action span { color: var(--muted); font-size: .81rem; line-height: 1.5; }
-.action.danger b { color: var(--danger); }
-.action.danger:hover:not(:disabled) { border-color: var(--danger); }
+.act-main:hover:not(:disabled) { background: var(--sunken); border-left-color: var(--tone); }
+.act-main:disabled { opacity: .4; cursor: not-allowed; }
+.act-name { font-weight: 570; font-size: .92rem; }
+.act-item[data-tone="danger"] .act-name,
+.act-item[data-tone="warn"] .act-name,
+.act-item[data-tone="ok"] .act-name { color: var(--tone); }
+
+.act-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--tone);
+}
+
+.act-toggle {
+  border: 0; background: none; color: var(--faint); cursor: pointer;
+  font: inherit; font-size: 1.1rem; line-height: 1; width: 40px;
+  transition: transform .15s, color .12s;
+}
+.act-toggle:hover { color: var(--text); }
+.act-toggle.is-open { transform: rotate(90deg); color: var(--text); }
+
+.act-desc {
+  margin: 0; padding: 0 .9rem .8rem 1.55rem;
+  color: var(--muted); font-size: .83rem; line-height: 1.55;
+}
 
 /* ── switch / segmented ────────────────────────────────────── */
 
@@ -418,11 +460,11 @@ body.is-resizing { user-select: none; cursor: grabbing; }
 
 .about { max-width: 620px; margin: 2rem auto; text-align: center; }
 .about-mark {
-  display: inline-grid; place-items: center;
+  display: inline-grid;
   width: 92px; height: 92px; border-radius: 26px; margin-bottom: 1.1rem;
-  background: linear-gradient(145deg, var(--accent), var(--accent-2));
-  color: #fff; box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 10px 34px color-mix(in srgb, var(--tint) 38%, transparent);
 }
+.about-mark:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 14px 44px color-mix(in srgb, var(--tint) 55%, transparent); }
 .about h2 { font-size: 1.9rem; letter-spacing: -.03em; }
 .about-ver { font-family: var(--mono); font-size: .95rem; font-weight: 500; color: var(--faint); }
 .about-tagline { color: var(--muted); margin-top: .4rem; font-size: .95rem; }
@@ -437,6 +479,30 @@ body.is-resizing { user-select: none; cursor: grabbing; }
 .about-grid dd { margin: 0; font-size: .9rem; font-weight: 550; }
 
 .about-links { display: flex; gap: .55rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1.4rem; }
+
+/* ── help ─────────────────────────────────────────────────── */
+
+.help { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
+.help-card {
+  background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 1.15rem 1.25rem; box-shadow: var(--shadow);
+}
+.help-card h3 { font-size: 1rem; margin-bottom: .3rem; }
+.help-steps { margin: .9rem 0 0; padding-left: 1.15rem; display: grid; gap: .85rem; }
+.help-steps li { line-height: 1.5; }
+.help-steps li::marker { color: var(--accent); font-weight: 650; }
+.help-step-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.help-step-head b { font-weight: 600; font-size: .9rem; }
+.help-step-head code {
+  color: var(--accent); background: var(--accent-bg);
+  padding: .08rem .38rem; border-radius: 5px; font-size: .78rem;
+}
+.help-steps p { color: var(--muted); font-size: .83rem; margin-top: .2rem; }
+.help-note {
+  margin-top: 1rem; padding: .6rem .75rem; border-radius: var(--r-sm);
+  background: var(--warn-bg); color: var(--warn);
+  font-size: .82rem; line-height: 1.5;
+}
 
 /* ── controls ──────────────────────────────────────────────── */
 
@@ -456,6 +522,15 @@ body.is-resizing { user-select: none; cursor: grabbing; }
 .btn-quiet { background: none; border-color: transparent; color: var(--muted); }
 .btn-quiet:hover { background: var(--sunken); color: var(--text); }
 .btn-sm { padding: .3rem .62rem; font-size: .81rem; }
+/* Neutral by default, lit on hover — none of the three About links is the
+   one you came for, so none of them gets to look like it. */
+.btn-link {
+  background: var(--sunken); border-color: var(--border);
+  color: var(--muted); text-decoration: none;
+}
+.btn-link:hover {
+  background: var(--accent-bg); border-color: var(--accent); color: var(--accent);
+}
 
 .control {
   font: inherit; font-size: .87rem; padding: .46rem .72rem;

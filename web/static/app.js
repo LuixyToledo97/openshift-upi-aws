@@ -54,7 +54,20 @@ const el = (tag, className, text) => {
 };
 
 const isSafe = (job) => job.group === "inspect";
-const resultText = (job) => job.running ? "running" : job.exit_code === 0 ? "ok" : `exit ${job.exit_code}`;
+const resultText = (job) =>
+  job.running ? "running"
+  : job.interrupted ? "interrupted"
+  : job.exit_code === 0 ? "ok"
+  : `exit ${job.exit_code}`;
+
+/* A run from an earlier server has no lines in this process — nobody kept
+   them. Its log file is the copy that was always the durable one, so that is
+   what gets shown. */
+function openJobOutput(job) {
+  if (job.historical && job.log_file) showLog(job.log_file, job.label);
+  else if (job.historical) toast("That run predates this server and its log is gone.", "bad");
+  else openOutput(job);
+}
 
 /* ── output panel: dockable, resizable, and never in the way ── */
 
@@ -188,10 +201,10 @@ async function refreshLogList() {
     select.append(opt);
   }
   // Keep the current selection across refreshes, or fall back to run output.
-  select.value = [...select.options].some((o) => o.value === chosen) ? chosen : "";
+  select.value = Array.from(select.options).some((o) => o.value === chosen) ? chosen : "";
 }
 
-function showLog(name) {
+function showLog(name, title) {
   if (!name) {
     // Back to the run's own output. Look the job up rather than reconstructing
     // one from what happens to be on screen — the panel title is a label, not
@@ -204,8 +217,10 @@ function showLog(name) {
   if (stream) { stream.close(); stream = null; }
   panel.open();
   $("console").textContent = "";
-  $("panelTitle").textContent = $("logSelect").selectedOptions[0].textContent.replace(/^● /, "");
-  $("panelSub").textContent = "tailing";
+  const chosen = $("logSelect").selectedOptions[0];
+  $("panelTitle").textContent = title || (chosen ? chosen.textContent.replace(/^● /, "") : name);
+  $("panelSub").textContent = "tailing " + name;
+  $("logSelect").value = Array.from($("logSelect").options).some((o) => o.value === name) ? name : "";
   $("cancelBtn").hidden = true;
 
   stream = new EventSource(`/api/logs/stream?name=${encodeURIComponent(name)}&token=${encodeURIComponent(TOKEN)}`);
@@ -371,7 +386,7 @@ function renderRecent() {
     left.append(el("b", null, job.label + (job.dry_run ? " (dry run)" : "")));
     left.append(el("div", "when", `${new Date(job.started * 1000).toLocaleTimeString()} · ${resultText(job)}`));
     const btn = el("button", "btn btn-quiet btn-sm", "Output");
-    btn.addEventListener("click", () => openOutput(job));
+    btn.addEventListener("click", () => openJobOutput(job));
     line.append(left, btn);
     host.append(line);
   }
@@ -379,23 +394,49 @@ function renderRecent() {
 
 /* ── actions ───────────────────────────────────────────────── */
 
+/* One vertical list per group, descriptions folded away behind a chevron.
+   The grid of cards showed every description at once, which turned the page
+   into a wall of text you had to read past to find the one button you wanted.
+   Clicking the row runs it; only the chevron expands — a control that both
+   explains and fires is a control you hesitate over. */
 function renderActions() {
   const host = $("actionGroups");
   host.textContent = "";
   for (const [id, title, blurb] of GROUPS) {
     const commands = state.commands.filter((c) => c.group === id);
     if (!commands.length) continue;
+
     const section = el("div", "agroup");
     const head = el("div", "agroup-head");
     head.append(el("h3", null, title), el("span", null, blurb));
-    const grid = el("div", "agrid");
+    const list = el("div", "actlist");
+
     for (const command of commands) {
-      const btn = el("button", "action" + (id === "danger" ? " danger" : ""));
-      btn.append(el("b", null, command.label), el("span", null, command.desc));
-      btn.addEventListener("click", () => run(command));
-      grid.append(btn);
+      const item = el("div", "act-item");
+      item.dataset.tone = command.tone || "neutral";
+
+      const row = el("div", "act-row");
+      const main = el("button", "act-main");
+      main.append(el("span", "act-dot"), el("span", "act-name", command.label));
+      main.addEventListener("click", () => run(command));
+
+      const toggle = el("button", "act-toggle", "›");
+      toggle.title = "What this does";
+      toggle.setAttribute("aria-expanded", "false");
+
+      const desc = el("p", "act-desc", command.desc);
+      desc.hidden = true;
+      toggle.addEventListener("click", () => {
+        desc.hidden = !desc.hidden;
+        toggle.setAttribute("aria-expanded", String(!desc.hidden));
+        toggle.classList.toggle("is-open", !desc.hidden);
+      });
+
+      row.append(main, toggle);
+      item.append(row, desc);
+      list.append(item);
     }
-    section.append(head, grid);
+    section.append(head, list);
     host.append(section);
   }
   const notes = Object.entries(state.excluded).map(([n, w]) => `ocplab ${n} — ${w}`).join("\n");
@@ -454,14 +495,95 @@ function renderRuns() {
     );
     const last = el("td");
     const btn = el("button", "btn btn-quiet btn-sm", "Output");
-    btn.addEventListener("click", () => openOutput(job));
+    btn.addEventListener("click", () => openJobOutput(job));
     last.append(btn);
     tr.append(last);
     body.append(tr);
   }
 }
 
+/* ── help ──────────────────────────────────────────────────── */
+
+/* Workflows rather than a command reference: the Actions tab already lists
+   what exists, and what it does not tell you is the order. Each step names
+   the action and the CLI command, because neither is the "real" one. */
+const WORKFLOWS = [
+  {
+    title: "First time on a new machine",
+    intro: "Once per checkout. None of it touches the cluster.",
+    steps: [
+      ["Prerequisites", "ocplab prereqs", "The manual checklist: binaries, an AWS account, a Red Hat pull secret, a delegated domain. Nothing here can be automated for you."],
+      ["Configuration tab", "ocplab init", "Start from a template, fill in your domain, AWS profile and hosted zone id, then Validate before saving."],
+      ["Bootstrap AWS", "ocplab bootstrap apply", "Creates the IAM user, the public hosted zone and the SSH keypair — the things Preflight can check but not create."],
+      ["Preflight", "ocplab preflight", "Read-only confirmation that all of the above actually works, including DNS delegation."],
+    ],
+  },
+  {
+    title: "Deploy a cluster",
+    intro: "About 40 minutes, and it starts billing from the first minute.",
+    steps: [
+      ["Preflight", "ocplab preflight", "Never skip it. It is seconds, and it catches expired credentials and broken delegation before Terraform creates anything."],
+      ["Deploy", "ocplab deploy", "Render, ignition, terraform apply, wait for bootstrap, then finalize. Watch it in the output panel; switch the dropdown to the Terraform or installer log for detail."],
+      ["Verify", "ocplab verify", "Every node Ready and every ClusterOperator healthy. This is what tells you the deploy actually worked."],
+      ["Console", "ocplab console", "The web console URL and the kubeadmin password."],
+    ],
+    note: "Closing this tab, or the browser, does not stop a deploy. Stopping the web server would.",
+  },
+  {
+    title: "While it is up",
+    steps: [
+      ["Cost", "ocplab cost", "What is deployed right now, priced live. It cannot see data transfer, which for short cycles is the largest charge of all."],
+      ["Power status", "ocplab power status", "Whether the nodes are running or stopped."],
+      ["Repair workers", "ocplab repair", "If a Spot worker was reclaimed. It refuses any plan that is not purely additive."],
+      ["— use a terminal —", "ocplab ssh <node>", "A shell on a node. Not available here: it needs a real terminal."],
+    ],
+  },
+  {
+    title: "Stop paying for it",
+    steps: [
+      ["Destroy", "ocplab destroy", "The whole cluster, in order. Around 12 minutes. This is the only thing that actually stops the bill."],
+      ["Power off", "ocplab power off", "An alternative, not a saving: EBS, the NAT gateway and the load balancers keep billing while the nodes are stopped. It is for pausing, not for economising."],
+    ],
+    note: "Spot instances cannot be stopped, only terminated — Power off refuses up front when compute.spot is set.",
+  },
+];
+
+function renderHelp() {
+  const host = $("helpContent");
+  if (host.childElementCount) return;  // static content; build it once
+  for (const flow of WORKFLOWS) {
+    const card = el("section", "help-card");
+    card.append(el("h3", null, flow.title));
+    if (flow.intro) card.append(el("p", "muted small", flow.intro));
+    const list = el("ol", "help-steps");
+    for (const [label, cmd, text] of flow.steps) {
+      const li = el("li");
+      const head = el("div", "help-step-head");
+      head.append(el("b", null, label), el("code", null, cmd));
+      li.append(head, el("p", null, text));
+      list.append(li);
+    }
+    card.append(list);
+    if (flow.note) card.append(el("p", "help-note", flow.note));
+    host.append(card);
+  }
+}
+
 /* ── about ─────────────────────────────────────────────────── */
+
+/* The mark picks a different tint each time you hover it. There is no state
+   worth encoding in that colour — it is the one place in a tool that spends
+   its life saying "this costs money" and "this cannot be undone" where a bit
+   of play costs nothing. */
+const TINTS = ["var(--accent)", "var(--accent-2)", "var(--ok)", "var(--warn)", "var(--danger)", "var(--info)"];
+
+function bindLogoTint(node) {
+  if (!node) return;
+  node.addEventListener("mouseenter", () => {
+    const pick = TINTS[Math.floor(Math.random() * TINTS.length)];
+    node.style.setProperty("--tint", pick);
+  });
+}
 
 function renderAbout() {
   const a = state.about || {};
@@ -484,13 +606,15 @@ function renderAbout() {
 
   const links = $("aboutLinks");
   links.textContent = "";
-  for (const [label, href, primary] of [
-    ["View the repository", a.repo_url, true],
-    [`@${a.github_user} on GitHub`, a.github_url, false],
-    [`@${a.medium_user} on Medium`, a.medium_url, false],
+  // All three neutral and equally weighted: none of them is the action you
+  // came to About to take, so promoting one was arbitrary.
+  for (const [label, href] of [
+    ["View the repository", a.repo_url],
+    [`@${a.github_user} on GitHub`, a.github_url],
+    [`@${a.medium_user} on Medium`, a.medium_url],
   ]) {
     if (!href) continue;
-    const link = el("a", "btn" + (primary ? " btn-primary" : ""), label);
+    const link = el("a", "btn btn-link", label);
     link.href = href;
     link.target = "_blank";
     // noopener: the page being opened must not get a handle back to this one,
@@ -506,6 +630,7 @@ function switchView(name) {
   document.querySelectorAll(".viewbtn").forEach((b) => b.classList.toggle("is-active", b.dataset.view === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("is-active", v.id === `view-${name}`));
   if (name === "runs") renderRuns();
+  if (name === "help") renderHelp();
 }
 
 function setLive(job) {
@@ -517,7 +642,10 @@ function setLive(job) {
     chip.dataset.job = job.id;
   }
   document.title = running ? `▶ ${job.label} — ocplab` : "ocplab";
-  document.querySelectorAll(".action").forEach((b) => { b.disabled = !!running; });
+  // .act-main, not the old .action: renaming the rows silently broke this, and
+  // the symptom would have been every action staying clickable during a deploy
+  // and answering 409.
+  document.querySelectorAll(".act-main").forEach((b) => { b.disabled = !!running; });
 }
 
 async function refresh() {
@@ -601,6 +729,8 @@ async function saveConfig() {
 function init() {
   panel.load();
   panel.bindResize();
+  bindLogoTint(document.querySelector(".brand-mark"));
+  bindLogoTint(document.querySelector(".about-mark"));
 
   document.querySelectorAll(".viewbtn").forEach((b) =>
     b.addEventListener("click", () => switchView(b.dataset.view)));
