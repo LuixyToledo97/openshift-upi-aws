@@ -48,14 +48,17 @@ uses [Semantic Versioning](https://semver.org/).
   (nodes, operators, power, cost) stays behind explicit actions, because those
   cost time and money and should be asked for.
 
-  The output panel appears when something runs, docks bottom or right, is
-  drag-resizable, and can tail log files as well as the run's own output —
-  Terraform's resource-by-resource detail and the OpenShift installer's log
-  included, which the CLI can only point you at in another terminal. It reserves space rather than overlaying, so the page below
+  The output panel appears when something runs, docks bottom or right, and is
+  drag-resizable. It reserves space rather than overlaying, so the page below
   stays scrollable — an overlay made three views unusable in an earlier
-  revision. Runs can be filtered by whether an operation was read-only or
-  actually changed something, and About carries the version, the licence and
-  the author's links.
+  revision. Its source selector switches between the run's own output and any
+  log file tailed live, Terraform's resource-by-resource detail and the
+  OpenShift installer's log included; the CLI can only point you at those in
+  another terminal.
+
+  Runs can be filtered by whether an operation was read-only or actually
+  changed something, and About carries the version, the licence and the
+  author's links.
 
   No new dependency and no build step: a stdlib HTTP server, plus plain HTML,
   CSS and JavaScript. The two fonts (Inter and JetBrains Mono, 176 KB, SIL
