@@ -73,7 +73,7 @@ All genuinely implemented (nothing is a stub):
 | `cost` | Approximate current USD/hour for whatever's actually deployed, power-state aware |
 | `console` | Prints the console URL and the `kubeadmin` password |
 | `env` | Prints `export KUBECONFIG=...` for this cluster, for `eval "$(ocplab env)"` |
-| `web` | Serves the local browser UI on `127.0.0.1` (dashboard, `cluster.yaml` editor, live operations) |
+| `web start\|stop\|status` | Runs the local browser UI on `127.0.0.1` as a background service (dashboard, `cluster.yaml` editor, live operations) |
 | `destroy` | Ordered teardown of the whole cluster |
 | `power on\|off\|status` | Graceful shutdown/restart, or a read-only power-state check — an alternative to `destroy`, **not** a cost-saving one (EBS/NAT/LBs keep billing while off) |
 | `ssh [node]` | Lists the running nodes, or opens a shell on one, through the EC2 Instance Connect Endpoint (nodes have no public IP) |
@@ -554,6 +554,28 @@ runs `ocplab <command>` as a subprocess and streams the output. Anything about
   problem. `_serve_static` therefore checks path *containment* rather than
   parent equality — the earlier check silently 404'd anything in a
   subdirectory.
+- **`web start` daemonises; it does not hold the terminal.** The child is
+  spawned as `python web/server.py` in its own session (`start_new_session`),
+  so closing the shell or Ctrl-C never reaches it. Two details are
+  load-bearing: the token goes through the **environment, not argv**, because
+  `/proc/<pid>/cmdline` is world-readable while `/proc/<pid>/environ` is
+  owner-only; and `start` polls the port until the server actually accepts a
+  connection before reporting success, so a server that dies on startup can't
+  leave a cheerful URL pointing at nothing.
+- **A recorded PID is never trusted on its own.** `.ocplab-web.json` outlives
+  reboots and `kill -9`, and PIDs get recycled, so `web_process_is_ours()`
+  requires the process to be alive *and* to have `web/server.py` in its
+  command line. Without the second half, `stop` could signal whatever
+  unrelated process inherited the id.
+- **`web start` runs a preflight and starts nothing if it fails**, accumulating
+  every problem like `validate` and `preflight` do. It requires `cluster.yaml`
+  to *exist* but deliberately **not** to be valid — the Configuration editor is
+  how a broken one gets fixed, so refusing to start over a config error would
+  lock the user out of the tool that repairs it.
+- **Nothing opens a browser.** `webbrowser.open` shells out to `gio` under WSL
+  and fails noisily (`Operation not supported`) while the server is fine. For a
+  background service, printing the URL — and reprinting it from `status` — is
+  both simpler and more honest.
 - **Stdlib only, no build step.** No new entry in `requirements.txt`, no Node,
   no `node_modules`. The frontend has to stay as readable on GitHub as the
   rest of the repository.

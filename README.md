@@ -657,7 +657,7 @@ verification — lives in the Ansible roles listed above.
 | `ocplab cost` | Approximate current USD/hour cost of what's actually deployed | No |
 | `ocplab console` | Prints the console URL and the `kubeadmin` password | No |
 | `ocplab env` | Prints `export KUBECONFIG=...` for this cluster, to `eval` | No |
-| `ocplab web` | Serves the browser UI on `127.0.0.1` | No (but it can run everything that does) |
+| `ocplab web start\|stop\|status` | Runs the browser UI on `127.0.0.1`, in the background | No (but it can run everything that does) |
 | `ocplab ssh [node]` | Lists the running nodes, or opens a shell on one | No |
 | `ocplab repair` | Recreates a worker that disappeared, on a running cluster | No |
 | `ocplab versions list\|download\|rm` | Manages the cached OpenShift binaries | No |
@@ -689,11 +689,31 @@ happens.
 
 ```bash
 source .venv/bin/activate
-./ocplab web
+./ocplab web start
 ```
 
-It prints a URL with a token and opens it (`--no-browser` if you'd rather it
-didn't, `--port` to move it off 8770).
+It runs **in the background and gives you your shell back** — closing the
+terminal doesn't stop it. `ocplab web status` reprints the URL with its token,
+`ocplab web stop` shuts it down, and `--port` moves it off 8770.
+
+`start` checks its prerequisites first and **starts nothing if any are
+missing**, reporting all of them at once rather than one per attempt:
+
+```
+Cannot start the web UI — 2 problem(s):
+
+  - 'cluster.yaml' does not exist. Run 'ocplab init' (or 'ocplab init --minimal')
+    to create one — every view in the UI reads it.
+  - port 8770 on 127.0.0.1 is already in use. Stop whatever is listening, or
+    pick another with --port.
+
+Nothing was started.
+```
+
+It requires `cluster.yaml` to *exist*, but deliberately does not require it to
+be **valid** — the Configuration editor is how you fix a broken one, so
+refusing to start over a config error would lock you out of the tool that
+repairs it.
 
 **It is a second thin layer, not a second program.** The server never talks to
 AWS and never reads Terraform state — it runs `ocplab <command>` as a

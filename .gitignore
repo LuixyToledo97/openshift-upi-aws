@@ -9,6 +9,9 @@
 # Written by the web UI before it overwrites the file above. Same personal
 # values, same reason to keep it out, same anchoring.
 /cluster.yaml.bak
+# Written by 'ocplab web start': pid, port and the session token.
+# Per-checkout, and 0600 because of that token.
+/.ocplab-web.json
 
 templates/install-config.yaml
 install-dir/

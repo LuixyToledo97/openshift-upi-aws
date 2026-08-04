@@ -8,9 +8,21 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- `ocplab web`: a browser UI for the lab — dashboard, a `cluster.yaml` editor
-  with live validation, and every operation with its output streaming as it
-  runs.
+- `ocplab web start|stop|status`: a browser UI for the lab — dashboard, a
+  `cluster.yaml` editor with live validation, and every operation with its
+  output streaming as it runs.
+
+  It runs as a background service and gives the terminal back: the server is
+  spawned in its own session, so closing the shell does not stop it. `status`
+  reprints the URL with its token, `stop` shuts it down. A recorded PID is
+  never trusted on its own — the process has to be alive *and* recognisably
+  the server, or `stop` could signal whatever inherited a recycled id.
+
+  `start` checks its prerequisites first and starts **nothing** if any fail,
+  reporting all of them at once. It requires `cluster.yaml` to exist but
+  deliberately not to be valid: the Configuration editor is how a broken one
+  gets fixed, and refusing to start over a config error would lock you out of
+  the tool that repairs it.
 
   It is a second thin layer, not a second program: the server never calls AWS
   and never reads Terraform state, it runs `ocplab <command>` as a subprocess

@@ -40,7 +40,6 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -651,8 +650,16 @@ def read_cli_version():
     return "unknown"
 
 
-def serve(port=8770, open_browser=True):
-    token = secrets.token_urlsafe(24)
+def serve(port=8770, token=None, announce=True):
+    """Run the server in the foreground until interrupted.
+
+    `ocplab web start` daemonises this and mints the token itself, so it can
+    print the URL and record it before the child is even listening. The token
+    arrives through the environment rather than argv on purpose: on Linux
+    /proc/<pid>/cmdline is world-readable, so an argv token leaks to every
+    other user on the box, while /proc/<pid>/environ is owner-only.
+    """
+    token = token or os.environ.get("OCPLAB_WEB_TOKEN") or secrets.token_urlsafe(24)
     try:
         httpd = Server(("127.0.0.1", port), token)
     except OSError as exc:
@@ -663,23 +670,28 @@ def serve(port=8770, open_browser=True):
             )
         raise SystemExit(f"could not start the server: {exc}")
 
-    url = f"http://127.0.0.1:{port}/?token={token}"
-    # flush explicitly: the URL carries the token, and it is the one thing the
-    # user cannot proceed without. Python buffers stdout when it isn't a
-    # terminal, so piping the server anywhere would otherwise swallow the link
-    # until the process ends — which for a server is never.
-    print(
-        f"ocplab web is running at:\n\n  {url}\n\n"
-        "Bound to 127.0.0.1 only. The token is required and is minted fresh on every\n"
-        "start, so the link is not worth sharing — it dies with the server.\n\n"
-        "Press Ctrl+C to stop.\n",
-        flush=True,
-    )
-    if open_browser:
-        threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
+    # flush explicitly: when daemonised this goes to logs/web.log, and Python
+    # buffers stdout whenever it isn't a terminal — which for a background
+    # service means the line only lands when the process dies.
+    if announce:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] listening on 127.0.0.1:{port}", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping.")
+        pass
     finally:
         httpd.server_close()
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] stopped", flush=True)
+
+
+# Entry point for the daemonised child. `ocplab web start` spawns this file
+# directly rather than re-entering the CLI, which keeps the background process
+# obviously identifiable in `ps` — and `stop` relies on exactly that to avoid
+# signalling an unrelated process that inherited a recycled PID.
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ocplab web server (started by 'ocplab web start')")
+    parser.add_argument("--port", type=int, default=8770)
+    args = parser.parse_args()
+    serve(port=args.port)

@@ -13,7 +13,10 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import time
@@ -1637,26 +1640,224 @@ def cmd_console(args):
         print('  eval "$(ocplab env)"')
 
 
+WEB_SERVER = REPO_ROOT / "web" / "server.py"
+# Per-checkout on purpose: the server serves *this* tree, so two clones can run
+# their own without a shared registry to arbitrate. Gitignored, and written
+# 0600 because it holds the session token.
+WEB_STATE_FILE = REPO_ROOT / ".ocplab-web.json"
+WEB_LOG = LOGS_DIR / "web.log"
+
+
+def web_state():
+    """The recorded server, or None. Never trusts the file over the process.
+
+    A PID file outlives whatever wrote it — a reboot, a kill -9, an OOM — and
+    PIDs get recycled. So a recorded PID only counts if a process with that id
+    is alive *and* is recognisably our server; anything else is treated as a
+    stale file rather than as a running service.
+    """
+    try:
+        data = json.loads(WEB_STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+    pid = data.get("pid")
+    if not isinstance(pid, int) or not web_process_is_ours(pid):
+        return None
+    return data
+
+
+def web_process_is_ours(pid):
+    try:
+        os.kill(pid, 0)  # signal 0: existence check, changes nothing
+    except (OSError, ProcessLookupError):
+        return False
+    # Alive is not enough — the id may have been recycled. The daemon is
+    # spawned as `python .../web/server.py`, so its own command line is the
+    # cheapest proof of identity available.
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+        return "web/server.py" in cmdline.replace("\x00", " ")
+    except OSError:
+        # No procfs (macOS): fall back to existence. Worst case `stop` signals
+        # a process that inherited the PID, which is why this is last resort.
+        return True
+
+
+def web_preflight(args):
+    """Everything that must hold before a server is worth starting.
+
+    Accumulated and reported together rather than one at a time, like
+    `validate` and `preflight` — finding out about three missing things across
+    three attempts is the failure mode this style exists to avoid.
+
+    Note what is deliberately *not* checked: whether cluster.yaml is valid. The
+    Configuration editor exists to fix a broken one, so refusing to start over
+    a config error would lock you out of the tool that repairs it. Its
+    existence is required, because everything else in the UI reads it.
+    """
+    problems = []
+
+    if not WEB_SERVER.is_file():
+        problems.append(f"{WEB_SERVER} is missing — the web UI ships with the repository.")
+    if not (REPO_ROOT / "web" / "static" / "index.html").is_file():
+        problems.append("web/static/index.html is missing — the UI's assets are incomplete.")
+
+    if not args.config.exists():
+        problems.append(
+            f"'{args.config}' does not exist. Run 'ocplab init' (or 'ocplab init --minimal') "
+            "to create one — every view in the UI reads it."
+        )
+
+    venv_ansible = REPO_ROOT / ".venv" / "bin" / "ansible-playbook"
+    if not venv_ansible.exists() and not shutil.which("ansible-playbook"):
+        problems.append(
+            "ansible-playbook was not found in .venv/bin or on your PATH. Run 'ocplab setup' — "
+            "without it the UI can display state but every operation would fail."
+        )
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.4)
+        if probe.connect_ex(("127.0.0.1", args.port)) == 0:
+            problems.append(
+                f"port {args.port} on 127.0.0.1 is already in use. "
+                f"Stop whatever is listening, or pick another with --port."
+            )
+
+    return problems
+
+
 def cmd_web(args):
-    """Serve the local web UI.
+    """Serve the local web UI as a background service.
 
     Kept to the same shape as `ssh`: this file resolves what to run and hands
-    over, with no logic of its own. The server lives in web/server.py, is
-    imported rather than embedded so `ocplab` stays a readable single file, and
-    talks to the rest of the project only by running `ocplab` as a subprocess.
+    over, with no logic of its own. The server lives in web/server.py and talks
+    to the rest of the project only by running `ocplab` as a subprocess.
     """
-    server_py = REPO_ROOT / "web" / "server.py"
-    if not server_py.is_file():
-        die(f"{server_py} is missing — the web UI is part of the repository, not a separate install.")
+    {"start": web_start, "stop": web_stop, "status": web_status}[args.action](args)
 
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("ocplab_web_server", server_py)
-    module = importlib.util.module_from_spec(spec)
+
+def web_start(args):
+    running = web_state()
+    if running:
+        die(
+            f"already running (pid {running['pid']}) at {running['url']}\n"
+            "  Use 'ocplab web status' to see it, or 'ocplab web stop' first.",
+            code=0 if args.yes else 1,
+        )
+
+    problems = web_preflight(args)
+    if problems:
+        print(f"Cannot start the web UI — {len(problems)} problem(s):\n", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        print("\nNothing was started.", file=sys.stderr)
+        sys.exit(1)
+
+    token = secrets.token_urlsafe(24)
+    env = os.environ.copy()
+    env["OCPLAB_WEB_TOKEN"] = token  # not argv: /proc/<pid>/cmdline is world-readable
+
     try:
-        spec.loader.exec_module(module)
-    except Exception as exc:  # noqa: BLE001 - surfaced to the user, not swallowed
-        die(f"could not load the web server ({exc}).")
-    module.serve(port=args.port, open_browser=not args.no_browser)
+        LOGS_DIR.mkdir(exist_ok=True)
+        log = open(WEB_LOG, "a")
+    except OSError as exc:
+        die(f"could not open {WEB_LOG} ({exc.strerror}).")
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(WEB_SERVER), "--port", str(args.port)],
+            cwd=str(REPO_ROOT), env=env,
+            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            # Its own session, so closing this terminal — or Ctrl+C in it —
+            # doesn't reach the server. That is the whole point of `start`.
+            start_new_session=True,
+        )
+    except OSError as exc:
+        die(f"could not start the server ({exc}).")
+    finally:
+        log.close()
+
+    url = f"http://127.0.0.1:{args.port}/?token={token}"
+    # Confirm it is actually listening before claiming success. A server that
+    # dies immediately (a port grabbed in the gap, an import error) would
+    # otherwise leave a cheerful URL pointing at nothing.
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            die(f"the server exited immediately (code {proc.returncode}). See {WEB_LOG}.")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.4)
+            if probe.connect_ex(("127.0.0.1", args.port)) == 0:
+                break
+        time.sleep(0.2)
+    else:
+        proc.terminate()
+        die(f"the server did not start listening within 10s. See {WEB_LOG}.")
+
+    try:
+        WEB_STATE_FILE.write_text(json.dumps({
+            "pid": proc.pid, "port": args.port, "token": token,
+            "url": url, "started": time.time(), "repo": str(REPO_ROOT),
+        }, indent=2))
+        WEB_STATE_FILE.chmod(0o600)  # it holds the token
+    except OSError as exc:
+        proc.terminate()
+        die(f"could not record the server state in {WEB_STATE_FILE} ({exc.strerror}).")
+
+    print(f"ocplab web is running in the background (pid {proc.pid}).\n")
+    print(f"  {url}\n")
+    print("Bound to 127.0.0.1 only. The token is minted fresh on every start, so the")
+    print("link dies with the server and is not worth sharing.")
+    print(f"\nLog:    {WEB_LOG}")
+    print("Stop:   ocplab web stop")
+
+
+def web_stop(args):
+    running = web_state()
+    if not running:
+        if WEB_STATE_FILE.exists():
+            WEB_STATE_FILE.unlink(missing_ok=True)
+            print("Not running — cleared a stale state file.")
+        else:
+            print("Not running.")
+        return
+
+    pid = running["pid"]
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        die(f"could not signal pid {pid} ({exc.strerror}).")
+
+    # SIGTERM first and only escalate if it is ignored: an in-flight `deploy`
+    # subprocess is the server's child, and giving it a chance to go down
+    # cleanly is worth two seconds.
+    for _ in range(40):
+        if not web_process_is_ours(pid):
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(pid, signal.SIGKILL)
+        print(f"pid {pid} ignored SIGTERM and was killed.")
+
+    WEB_STATE_FILE.unlink(missing_ok=True)
+    print(f"Stopped (pid {pid}).")
+
+
+def web_status(args):
+    running = web_state()
+    if not running:
+        stale = " (a stale state file was left behind and is being ignored)" if WEB_STATE_FILE.exists() else ""
+        print(f"ocplab web: not running{stale}")
+        print("Start it with 'ocplab web start'.")
+        return
+
+    uptime = time.time() - running.get("started", time.time())
+    hours, rest = divmod(int(uptime), 3600)
+    print(f"ocplab web: running (pid {running['pid']})")
+    print(f"  url:    {running['url']}")
+    print(f"  uptime: {hours}h {rest // 60}m {rest % 60}s")
+    print(f"  repo:   {running.get('repo', '?')}")
+    print(f"  log:    {WEB_LOG}")
 
 
 def cmd_env(args):
@@ -1832,12 +2033,17 @@ def build_parser():
 
     p = subparsers.add_parser(
         "web", parents=[sub_global_parser],
-        help="serve the local web UI on 127.0.0.1",
+        help="start, stop or check the local web UI",
         description=(
-            "Serves a browser UI for this lab: the dashboard, the cluster.yaml "
-            "editor, and every operation with its output streamed live.\n\n"
+            "Runs a browser UI for this lab in the background: the dashboard, the "
+            "cluster.yaml editor, and every operation with its output streamed "
+            "live.\n\n"
+            "'start' checks its prerequisites first and starts nothing if any are "
+            "missing, then daemonises the server and returns your shell — closing "
+            "the terminal does not stop it. 'status' reprints the URL with its "
+            "token; 'stop' shuts it down.\n\n"
             "It binds 127.0.0.1 and nothing else, rejects requests whose Host "
-            "header is not loopback, and requires a token minted at startup — "
+            "header is not loopback, and requires a token minted at each start — "
             "this server holds your AWS credentials and can create and destroy "
             "real infrastructure, so it is not something to expose. There is "
             "deliberately no flag to change the bind address.\n\n"
@@ -1846,8 +2052,8 @@ def build_parser():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("action", nargs="?", default="status", choices=["start", "stop", "status"])
     p.add_argument("--port", type=int, default=8770, help="port on 127.0.0.1 (default: 8770)")
-    p.add_argument("--no-browser", action="store_true", help="don't open a browser window")
     p.set_defaults(func=cmd_web)
 
     p = subparsers.add_parser(
