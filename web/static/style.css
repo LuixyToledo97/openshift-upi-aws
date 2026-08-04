@@ -168,6 +168,9 @@ code, kbd { font-family: var(--mono); font-size: .87em; }
   color: var(--faint); padding: .1rem .35rem;
   border: 1px solid var(--border); border-radius: 5px;
 }
+/* Empty until /api/state answers. Without this it renders as a small blank
+   pill next to the name, which reads as a rendering fault. */
+.brand-ver:empty { display: none; }
 
 .topbar-right { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap; }
 
@@ -259,6 +262,8 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 .scrollbox.tall { max-height: min(60vh, 620px); }
 
 .split { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.split > .block { display: flex; flex-direction: column; }
+.split > .block > .scrollbox, .split > .block > .chiprow:last-child { flex: 1; }
 .block {
   background: var(--raised); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 1.15rem; box-shadow: var(--shadow);
@@ -482,7 +487,11 @@ body.is-resizing { user-select: none; cursor: grabbing; }
 
 /* ── help ─────────────────────────────────────────────────── */
 
-.help { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-items: start; }
+/* Equal heights across a row: `align-items: start` let each card hug its own
+   content, which made a row of three look like a broken staircase. */
+.help { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.help-card { display: flex; flex-direction: column; }
+.help-steps { flex: 1; }
 .help-card {
   background: var(--raised); border: 1px solid var(--border);
   border-radius: var(--r-lg); padding: 1.15rem 1.25rem; box-shadow: var(--shadow);

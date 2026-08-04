@@ -500,7 +500,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "repo": str(REPO_ROOT),
                 "config_exists": (REPO_ROOT / "cluster.yaml").exists(),
                 "current": RUNNER.current.as_dict() if RUNNER.current else None,
-                "recent": [j.as_dict() for j in RUNNER.recent()],
+                # Already dicts: recent() merges live jobs with history loaded
+                # from disk, which never had Job objects to begin with.
+                "recent": RUNNER.recent(),
             })
         elif path == "/api/overview":
             self._overview()
