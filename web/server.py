@@ -459,9 +459,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
-        self.end_headers()
-        if body:
-            self.wfile.write(body)
+        try:
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The client left before we finished answering. Routine here: a tab
+            # that gets a 401 reloads itself, which tears down the request in
+            # flight — and the reload is the point.
+            pass
 
     def _json(self, code, payload):
         self._send(code, json.dumps(payload).encode(), "application/json")
@@ -793,6 +799,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        """A client that hangs up is not an error worth a stack trace.
+
+        The default dumps a full traceback per occurrence, which buries real
+        faults in noise — and 'does the log contain a traceback' is the
+        cheapest health check this server has. Anything that is not a dropped
+        connection still gets reported in full.
+        """
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
 
     def __init__(self, addr, token):
         super().__init__(addr, Handler)
