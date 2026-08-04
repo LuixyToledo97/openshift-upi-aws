@@ -29,8 +29,19 @@ uses [Semantic Versioning](https://semver.org/).
   `ocplab ssh` is deliberately excluded — it needs a real terminal, and a web
   terminal would hand whoever reached the server a root shell on the nodes.
 
+  The overview is built on data, not on parsed prose: `ocplab status` grew a
+  `--json` flag and the dashboard reads that. A dashboard scraped from human
+  output breaks the first time someone improves a sentence. Everything it
+  shows is local and instant, which is what makes it safe to poll — live state
+  (nodes, operators, power, cost) stays behind explicit actions, because those
+  cost time and money and should be asked for.
+
   No new dependency and no build step: a stdlib HTTP server, plus plain HTML,
   CSS and JavaScript.
+
+- `ocplab status --json`, the same information as the text output in a
+  machine-readable shape. Written for the web dashboard, useful for anything
+  else that wants the local state without parsing a report.
 
 - `oc` and `kubectl` now point at **this** cluster, not just at the matching
   client version. Activating the venv exports `KUBECONFIG`, and `deactivate`

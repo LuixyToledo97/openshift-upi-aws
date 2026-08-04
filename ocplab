@@ -32,6 +32,11 @@ ANSIBLE_DIR = REPO_ROOT / "ansible"
 PLAYBOOKS_DIR = ANSIBLE_DIR / "playbooks"
 INSTALL_DIR = REPO_ROOT / "install-dir"
 KUBECONFIG_PATH = INSTALL_DIR / "auth" / "kubeconfig"
+# Mirrors `ocplab_ignition_max_age_hours` in ansible/inventory/group_vars/all/
+# defaults.yml, which is the value that actually governs regeneration. This
+# copy only decides whether `status` calls an install-dir stale, so the two
+# drifting would mis-report rather than mis-behave — but keep them in step.
+OCPLAB_IGNITION_MAX_AGE_HOURS = 24
 LOGS_DIR = REPO_ROOT / "logs"
 # The cluster.yaml templates 'ocplab init' writes. Files, not embedded strings:
 # a config template is data, the whole repository is required to run anything
@@ -1505,53 +1510,106 @@ def cmd_safety_net(args):
     run_ansible_playbook("safety-net", args, extra_vars={"ocplab_safety_net_action": action}, confirm_msg=confirm_msg)
 
 
+def collect_status(cfg):
+    """Everything `status` knows, as data rather than as printed lines.
+
+    Split out so the web UI can render a dashboard without parsing human text.
+    Everything in here is local and instant — no AWS call, no cluster call —
+    which is what makes it safe to poll. Live state stays where it was:
+    `verify` and `power status`.
+    """
+    version = dig(cfg, "openshift", "version")
+    cached = cached_versions()
+    shell_kubeconfig = os.environ.get("KUBECONFIG")
+
+    data = {
+        "cluster": {
+            "name": cfg["metadata"]["name"],
+            "base_domain": cfg["metadata"]["baseDomain"],
+            "region": cfg["platform"]["aws"]["region"],
+            "control_plane": cfg["controlPlane"]["replicas"],
+            "compute": cfg["compute"]["replicas"],
+        },
+        "openshift": {
+            "pinned": version,
+            "downloaded": bool(version) and any(v["version"] == version for v in cached),
+            "cache": [{"version": v["version"], "size": v["size"]} for v in cached],
+            "cache_total": sum(v["size"] for v in cached),
+            "cache_total_human": human_size(sum(v["size"] for v in cached)) if cached else None,
+            "cache_dir": str(BIN_CACHE),
+        },
+        "kubeconfig": {
+            "expected": str(KUBECONFIG_PATH),
+            "current": shell_kubeconfig,
+            "points_here": shell_kubeconfig == str(KUBECONFIG_PATH),
+            "exists": KUBECONFIG_PATH.exists(),
+        },
+        "install_dir": {"exists": False},
+        "terraform": {"exists": False},
+    }
+
+    meta_file = INSTALL_DIR / "metadata.json"
+    if meta_file.exists():
+        age_h = (time.time() - meta_file.stat().st_mtime) / 3600
+        data["install_dir"] = {
+            "exists": True,
+            "infra_id": json.loads(meta_file.read_text()).get("infraID", "?"),
+            "age_hours": round(age_h, 1),
+            # The 24h expiry is the whole reason this is reported at all.
+            "stale": age_h > OCPLAB_IGNITION_MAX_AGE_HOURS,
+        }
+
+    tfstate = TERRAFORM_DIR / "terraform.tfstate"
+    if tfstate.exists():
+        state = json.loads(tfstate.read_text())
+        data["terraform"] = {"exists": True, "resources": len(state.get("resources", []))}
+
+    return data
+
+
 def cmd_status(args):
     cfg = load_and_validate(args.config)
-    name = cfg["metadata"]["name"]
-    print(f"cluster.yaml: {name}.{cfg['metadata']['baseDomain']} ({cfg['platform']['aws']['region']})")
 
     # Before reporting, not after: status used to describe a pinned version as
     # active while `oc` still resolved elsewhere, because nothing had relinked
     # .venv/bin yet. Reporting a state is a poor excuse for not applying it.
     sync_managed_binaries(cfg)
 
-    version = dig(cfg, "openshift", "version")
-    cached = cached_versions()
-    if version:
-        have = any(v["version"] == version for v in cached)
-        state = "downloaded" if have else "NOT downloaded — run 'ocplab versions download'"
-        print(f"OpenShift: {version} pinned in cluster.yaml, {state}")
+    data = collect_status(cfg)
+    if getattr(args, "json", False):
+        print(json.dumps(data, indent=2))
+        return
+
+    c, o, k = data["cluster"], data["openshift"], data["kubeconfig"]
+    print(f"cluster.yaml: {c['name']}.{c['base_domain']} ({c['region']})")
+
+    if o["pinned"]:
+        state = "downloaded" if o["downloaded"] else "NOT downloaded — run 'ocplab versions download'"
+        print(f"OpenShift: {o['pinned']} pinned in cluster.yaml, {state}")
     else:
         print("OpenShift: no version pinned — using openshift-install/oc from the PATH")
-    if cached:
-        total = sum(v["size"] for v in cached)
-        listed = ", ".join(v["version"] for v in cached)
-        print(f"binary cache: {listed} ({human_size(total)} in {BIN_CACHE})")
+    if o["cache"]:
+        listed = ", ".join(v["version"] for v in o["cache"])
+        print(f"binary cache: {listed} ({o['cache_total_human']} in {o['cache_dir']})")
 
     # The version behind `oc` is reported two lines up; where it points is the
     # half that can silently be another cluster, so it belongs here too.
-    shell_kubeconfig = os.environ.get("KUBECONFIG")
-    if shell_kubeconfig == str(KUBECONFIG_PATH):
+    if k["points_here"]:
         print("KUBECONFIG: this cluster")
-    elif shell_kubeconfig:
-        print(f"KUBECONFIG: {shell_kubeconfig} — NOT this cluster")
+    elif k["current"]:
+        print(f"KUBECONFIG: {k['current']} — NOT this cluster")
     else:
         print("KUBECONFIG: unset — oc uses ~/.kube/config, which is NOT this cluster")
 
-    meta_file = INSTALL_DIR / "metadata.json"
-    if meta_file.exists():
-        infra_id = json.loads(meta_file.read_text()).get("infraID", "?")
-        age_h = (time.time() - meta_file.stat().st_mtime) / 3600
-        stale = " (>24h, regenerate before applying Terraform)" if age_h > 24 else ""
-        print(f"install-dir: infraID={infra_id}, generated {age_h:.1f}h ago{stale}")
+    idir = data["install_dir"]
+    if idir["exists"]:
+        stale = " (>24h, regenerate before applying Terraform)" if idir["stale"] else ""
+        print(f"install-dir: infraID={idir['infra_id']}, generated {idir['age_hours']:.1f}h ago{stale}")
     else:
         print("install-dir: doesn't exist yet (run 'ocplab ignition')")
 
-    tfstate = TERRAFORM_DIR / "terraform.tfstate"
-    if tfstate.exists():
-        state = json.loads(tfstate.read_text())
-        n = len(state.get("resources", []))
-        print(f"terraform.tfstate: {n} managed resources")
+    if data["terraform"]["exists"]:
+        print(f"terraform.tfstate: {data['terraform']['resources']} managed resources")
     else:
         print("terraform.tfstate: doesn't exist yet (nothing deployed)")
 
@@ -1752,6 +1810,7 @@ def build_parser():
     p.set_defaults(func=cmd_cost)
 
     p = subparsers.add_parser("status", parents=[sub_global_parser], help="local status summary (without touching AWS)")
+    p.add_argument("--json", action="store_true", help="emit the same information as JSON")
     p.set_defaults(func=cmd_status)
 
     p = subparsers.add_parser("destroy", parents=[sub_global_parser], help="ordered teardown of the cluster")

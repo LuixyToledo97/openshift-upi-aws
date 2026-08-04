@@ -524,6 +524,13 @@ runs `ocplab <command>` as a subprocess and streams the output. Anything about
   server writes that path itself into a temp directory. It exists so pasted
   YAML can be checked *before* saving — otherwise "see what's wrong with this
   config" would mean overwriting the working one to find out.
+- **The dashboard reads `ocplab status --json`, not parsed text.** `status` was
+  refactored into `collect_status()` plus two renderers for this. A dashboard
+  built on scraping human prose breaks the first time someone improves a
+  sentence, and this project rewrites its own sentences often. Everything in
+  that payload is local and instant, which is what makes polling it safe —
+  live state (`verify`, `cost`, `power status`) stays behind explicit buttons,
+  because those cost an AWS round trip and two of them cost money.
 - **Stdlib only, no build step.** No new entry in `requirements.txt`, no Node,
   no `node_modules`. The frontend has to stay as readable on GitHub as the
   rest of the repository.

@@ -388,6 +388,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "current": RUNNER.current.as_dict() if RUNNER.current else None,
                 "recent": [j.as_dict() for j in RUNNER.recent()],
             })
+        elif path == "/api/overview":
+            self._overview()
         elif path == "/api/config":
             cfg = REPO_ROOT / "cluster.yaml"
             self._json(200, {
@@ -489,6 +491,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(500, {"error": f"could not write cluster.yaml: {exc}"})
             return
         self._json(200, {"saved": True, "backup": cfg.exists()})
+
+    def _overview(self):
+        """The dashboard's data, from `ocplab status --json`.
+
+        Structured on purpose rather than scraped from the text output: a
+        dashboard built on parsing human prose breaks the first time someone
+        improves a sentence. Everything it reports is local and instant — no
+        AWS call — which is what makes it safe for the page to poll. Live state
+        (nodes, operators, power, cost) stays behind explicit actions, because
+        those cost time and money and should be asked for.
+        """
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(OCPLAB), "status", "--json"],
+                cwd=str(REPO_ROOT), env=child_env(), text=True, timeout=30,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            self._json(504, {"error": "ocplab status timed out"})
+            return
+        if proc.returncode != 0:
+            # The usual cause is an invalid or missing cluster.yaml, and the
+            # message says which — the dashboard shows it instead of empty cards.
+            self._json(200, {"ok": False, "error": (proc.stderr or proc.stdout).strip()})
+            return
+        try:
+            self._json(200, {"ok": True, "status": json.loads(proc.stdout)})
+        except ValueError:
+            self._json(500, {"ok": False, "error": "could not parse the status output"})
 
     def _validate(self, body):
         """Validate YAML that hasn't been saved yet.
