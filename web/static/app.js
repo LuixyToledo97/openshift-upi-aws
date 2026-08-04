@@ -32,9 +32,35 @@ async function api(path, options = {}) {
     ...options,
     headers: { "X-Ocplab-Token": TOKEN, "Content-Type": "application/json", ...(options.headers || {}) },
   });
+  if (res.status === 401) recoverStaleToken();
+  // Any success clears the guard, so the *next* restart can self-heal too —
+  // otherwise one recovery would spend the only attempt this tab ever gets.
+  else if (res.ok) { try { sessionStorage.removeItem("ocplab.reloaded"); } catch { /* no-op */ } }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
   return body;
+}
+
+/* A restart mints a new token, which silently invalidates every open tab —
+   every call then 401s and the page looks dead for no visible reason.
+   Reloading fixes it completely: "/" is served without authentication and the
+   server stamps the current token into the HTML on the way out, so the tab
+   comes back with valid credentials.
+   Guarded by sessionStorage so a genuinely wrong token cannot put the page in
+   a reload loop; the second failure gets told the truth instead. */
+function recoverStaleToken() {
+  try {
+    if (sessionStorage.getItem("ocplab.reloaded") === "1") {
+      toast("This tab's token is not valid. Run 'ocplab web status' and open the URL it prints.", "bad");
+      return;
+    }
+    sessionStorage.setItem("ocplab.reloaded", "1");
+  } catch {
+    // Private browsing: no guard available, so don't risk the loop.
+    toast("This tab's token is stale — reload the page.", "bad");
+    return;
+  }
+  location.reload();
 }
 
 function toast(message, kind) {
@@ -577,11 +603,14 @@ function renderHelp() {
    of play costs nothing. */
 const TINTS = ["var(--accent)", "var(--accent-2)", "var(--ok)", "var(--warn)", "var(--danger)", "var(--info)"];
 
+/* Set on <html>, not on the element hovered: the header mark, the About mark
+   and the About links all read the same variable, so they light up together
+   instead of drifting out of step with each other. */
 function bindLogoTint(node) {
   if (!node) return;
   node.addEventListener("mouseenter", () => {
     const pick = TINTS[Math.floor(Math.random() * TINTS.length)];
-    node.style.setProperty("--tint", pick);
+    document.documentElement.style.setProperty("--tint", pick);
   });
 }
 

@@ -72,6 +72,10 @@
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --panel-size: 320px;
+  /* Re-rolled by JS on either mark's hover, and read by both marks and the
+     About links — one variable is what keeps them in step instead of each
+     lighting up on its own. */
+  --tint: var(--accent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -151,9 +155,6 @@ code, kbd { font-family: var(--mono); font-size: .87em; }
 
 .brand { display: flex; align-items: center; gap: .6rem; }
 .brand-mark, .about-mark {
-  /* --tint is re-rolled by JS on every hover. The default keeps it on-brand
-     when nothing has hovered it yet. */
-  --tint: var(--accent);
   display: grid; place-items: center;
   background: linear-gradient(145deg, var(--tint), color-mix(in srgb, var(--tint) 55%, var(--accent-2)));
   color: #fff;
@@ -286,7 +287,13 @@ main { padding: clamp(1.3rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
 
 /* ── actions ───────────────────────────────────────────────── */
 
-.agroup { margin-bottom: 1.7rem; }
+/* Groups sit side by side rather than stacked. Inspect alone is nine rows;
+   stacked, the tab was mostly scrolling. */
+#actionGroups {
+  display: grid; gap: 1.4rem 1.1rem; align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+}
+.agroup { margin-bottom: 0; }
 .agroup-head { display: flex; align-items: baseline; gap: .6rem; margin-bottom: .75rem; flex-wrap: wrap; }
 .agroup-head h3 { font-size: .96rem; }
 .agroup-head span { color: var(--faint); font-size: .8rem; }
@@ -540,7 +547,9 @@ body.is-resizing { user-select: none; cursor: grabbing; }
   color: var(--muted); text-decoration: none;
 }
 .btn-link:hover {
-  background: var(--accent-bg); border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  border-color: var(--tint);
+  color: var(--tint);
 }
 
 .control {
