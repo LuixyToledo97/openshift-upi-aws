@@ -96,15 +96,21 @@ the real one.
 The version, read from `ocplab --version` rather than hardcoded so the two
 cannot drift, the licence, and the author's links.
 
-The output panel appears when you run something, docks to the bottom or the
-right, and is drag-resizable; it reserves space rather than covering the page,
-and remembers where you put it. Closing it never stops the run.
+## The output panel
 
-Its dropdown switches what the panel is showing: the run's own output, or any
-log file being tailed live — including Terraform's resource-by-resource detail
-and the OpenShift installer's own log. During a deploy that is the difference
-between reading "terraform apply, 5m47s" and watching the resources appear,
-and it saves the second terminal the CLI otherwise sends you to.
+![The output panel, with its log selector open](assets/screenshots/output-panel.png)
+
+It appears when you run something, docks to the bottom or the right, and is
+drag-resizable. It reserves space rather than covering the page — an earlier
+revision overlaid it, which made three of the views impossible to scroll — and
+it remembers where you put it. Closing it never stops the run.
+
+**The dropdown is the part worth having.** It switches between the run's own
+output and any log file tailed live, the shot above being every log this lab
+has produced: Terraform's resource-by-resource detail for each apply and
+destroy, and the OpenShift installer's own log. During a deploy that is the
+difference between reading "terraform apply, 5m47s" and watching the resources
+appear — and it removes the second terminal the CLI otherwise sends you to.
 
 Three things worth knowing:
 
