@@ -8,10 +8,14 @@ anything.
 
 ## What this is
 
-**OpenShift 4.22 on AWS with UPI** (User-Provisioned Infrastructure):
-Terraform defines the infrastructure and the OpenShift installer only
-generates the Ignition configs and monitors the boot process. This is not
-ROSA nor IPI.
+**OpenShift on AWS with UPI** (User-Provisioned Infrastructure): Terraform
+defines the infrastructure and the OpenShift installer only generates the
+Ignition configs and monitors the boot process. This is not ROSA nor IPI.
+
+The version is a `cluster.yaml` field, not a property of the project —
+`openshift.version` pins the installer, the client and the RHCOS AMI together.
+Development and every measurement in this file were done against 4.22.x; see
+README's tested-versions table for what has actually been run end to end.
 
 - Two front ends over one engine: the **`ocplab` CLI**, and a **local browser
   UI** (`ocplab web`) that runs the very same commands as subprocesses. Neither
@@ -90,12 +94,16 @@ Global flags (before or after the subcommand): `-f/--config`, `--dry-run`
 (maps to Ansible's `--check --diff`), `-v`/`-vv`, `--yes` (skip
 confirmation), `--tags`.
 
-`cluster.yaml`'s schema is documented in `README.md` §4 — don't edit
+`cluster.yaml`'s schema is documented in `docs/cli.md` — don't edit
 `terraform.tfvars`/`generated.yml` by hand, they're generated from it.
 
 ## Structure
 
 ```
+├── README.md               # landing page — links into docs/, deliberately short
+├── docs/                   # the long-form documentation, one file per topic
+│   ├── profiles.md          #   standard vs minimal, side by side
+│   └── assets/              #   the mark, and the 1280x640 repo preview tile
 ├── ocplab                  # CLI in Python (thin UX layer)
 ├── web/                    # browser UI — a second thin layer over the same CLI
 │   ├── server.py            #   stdlib HTTP server; runs `ocplab` as a subprocess
@@ -382,9 +390,10 @@ hook can't reach. Four things about it are load-bearing:
 - **It exports the path even when `install-dir` doesn't exist.** Gating on
   existence would silently fall back to `~/.kube/config` for any shell
   activated before the first deploy — exactly the bug. `oc` failing with
-  `localhost:8080 refused` is the safe direction, and README §11 names it.
-- **README §2.1.1 is the tested-versions table, and it is a factual record,
-  not a compatibility claim.** A row only goes in after a real end-to-end run
+  `localhost:8080 refused` is the safe direction, and `docs/troubleshooting.md`
+  names it.
+- **The tested-versions table in `README.md` is a factual record, and it is a factual record,
+  rather than a compatibility claim.** A row only goes in after a real end-to-end run
   against AWS: deploy → verify with every node Ready and every ClusterOperator
   healthy → ssh → destroy leaving nothing behind. Not "the binary downloaded",
   not "terraform applied". After any deploy on a version that isn't listed,
