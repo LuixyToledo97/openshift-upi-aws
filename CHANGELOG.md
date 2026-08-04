@@ -4,9 +4,10 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-08-04
 
 ### Added
+
 
 - `ocplab web start|stop|status`: a browser UI for the lab — dashboard, a
   `cluster.yaml` editor with live validation, and every operation with its
@@ -187,94 +188,6 @@ uses [Semantic Versioning](https://semver.org/).
   Today that is exactly one version, which is the point of writing it down.
 
 
-### Changed
-
-- `destroy` no longer spends five minutes waiting for the router ELB to delete
-  itself. Measured on a real teardown: the poll ran all thirty attempts (364s,
-  half of a 12m10s destroy) and the manual-delete fallback then removed it in
-  26s. That is structural rather than unlucky — the ingress-operator is scaled
-  to zero so it cannot recreate the ELB, and it is also what deletes the router
-  Service the cloud-controller-manager watches, so nothing is left to tear the
-  ELB down on its own. The timeout drops from 300s to 60s, which keeps the poll
-  as a check without paying for an outcome that cannot arrive. Deleting the
-  router Service explicitly is the proper fix and is in `BACKLOG.md`.
-
-### Fixed
-
-- Long `until`/`retries` waits produced no output at all when nothing was
-  attached to a terminal. Each attempt went to the log file only, and the
-  in-place "⋯ attempt n/m" line is a no-op without a TTY — so a `destroy`
-  watched from the web UI, or any redirected run, sat silent for the six
-  minutes it polls the router ELB and potentially twenty more on its ENIs,
-  looking hung while working normally. Piped runs now get one line per
-  attempt; terminals and the log file are unchanged.
-
-- `cost` priced Spot instances at their on-demand rate. Measured on 2026-08-03
-  against a live minimal-profile cluster, it reported **$0.9213/h** against a
-  real **$0.8269/h** — inflated by **11.4%**, and inflated specifically in the
-  direction that makes running on Spot look less worthwhile than it is.
-
-  It now reads each instance's lifecycle — which `ec2_instance_info` already
-  returns — and looks up the current Spot price for the types actually running
-  as Spot. Those prices are deliberately **not** cached, unlike the on-demand
-  ones: on-demand pricing changes a few times a year, Spot pricing moves by the
-  hour and by availability zone, so a cached Spot price would be exactly as
-  wrong as the on-demand figure it replaces, just less obviously. When a Spot
-  price can't be fetched the instance falls back to on-demand and the report
-  says which types that happened to, so the number is over-stated rather than
-  quietly optimistic.
-
-  The compute line splits into on-demand and Spot only when something is
-  actually on Spot, and the report's closing note now says which basis was
-  used — a Spot figure is a snapshot of a price that moves, and presenting it
-  as if it were a rate would be its own kind of wrong.
-
-- The orphaned `k8s-elb-*` security group could not be deleted, which stalled
-  `destroy` on the VPC for twenty minutes and then failed it — with nothing in
-  the output connecting the two, because the original single attempt swallowed
-  its own error under `ignore_errors`.
-
-  It was first treated as a timing problem and given retries. That made the
-  failure visible, which was worth doing, but it could never have fixed it:
-  measured on 2026-08-03, **zero** network interfaces were using the group and
-  eleven minutes of retrying changed nothing. AWS reports
-  `DependencyViolation: has a dependent object` for a security group that
-  another group's *rules* reference, and the ingress-operator adds exactly such
-  a rule to the node security groups so the router ELB can reach the nodes.
-  That reference only clears when Terraform deletes the node groups — which
-  happens *after* the cleanup task, so no retry budget could have succeeded.
-
-  `teardown` now revokes the referencing rules before deleting the group, which
-  is safe because those node groups are seconds from being destroyed anyway.
-  The remaining short retry is a safety net for a genuine ENI attachment, and
-  its warning says so, to send the next person looking at interfaces rather
-  than back at the rules.
-
-- Closing the terminal killed a running `deploy`. The stdout callback wrote to
-  `sys.stdout` unguarded, so once the terminal window was gone the first task
-  to complete raised and took the whole playbook down — silently, mid-install,
-  leaving the bootstrap running and billing and its CSRs unapproved. Every
-  terminal write is now guarded, and the log is written *before* stdout rather
-  than after: the on-disk record is the durable half, the live view is the
-  disposable one. Losing a window now costs the view and nothing else.
-- `destroy` could fail with `DependencyViolation` on the internet gateway
-  because the ingress router's ELB came back after being deleted. Deleting the
-  default `IngressController` doesn't remove it — the cluster-ingress-operator
-  reconciles it straight back, along with a new Classic ELB, and that ELB's
-  ENIs hold the public subnet. Seen on 2026-08-03: deleted at 10:48:43, the
-  ELB poll correctly saw zero at 10:48:48, and a replacement appeared at
-  10:50:08, blocking the teardown until terraform gave up 20 minutes later.
-
-  Earlier teardowns had won that race against the masters being terminated
-  rather than avoided it. `teardown` now scales `cluster-version-operator` and
-  then `ingress-operator` to zero before deleting anything — the CVO first, or
-  it scales the other back up — and re-checks afterwards instead of trusting
-  that "zero now" means "zero from here on". Not version-specific.
-
-## [1.1.0] - 2026-08-02
-
-### Added
-
 - Readable command output: a custom Ansible stdout callback
   (`ansible/callback_plugins/ocplab_output.py`) replaces the raw
   `TASK [role : ...] ****` stream with one line per task. Skipped tasks are
@@ -384,6 +297,18 @@ uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+
+- `destroy` no longer spends five minutes waiting for the router ELB to delete
+  itself. Measured on a real teardown: the poll ran all thirty attempts (364s,
+  half of a 12m10s destroy) and the manual-delete fallback then removed it in
+  26s. That is structural rather than unlucky — the ingress-operator is scaled
+  to zero so it cannot recreate the ELB, and it is also what deletes the router
+  Service the cloud-controller-manager watches, so nothing is left to tear the
+  ELB down on its own. The timeout drops from 300s to 60s, which keeps the poll
+  as a check without paying for an outcome that cannot arrive. Deleting the
+  router Service explicitly is the proper fix and is in `BACKLOG.md`.
+
+
 - The `infra` role no longer uses `community.general.terraform`. That module
   returns everything only when it finishes, which is why a long apply showed
   one frozen line and no way to tell progress from a hang. Its built-in
@@ -395,6 +320,78 @@ uses [Semantic Versioning](https://semver.org/).
   honours `NO_COLOR`.
 
 ### Fixed
+
+
+- Long `until`/`retries` waits produced no output at all when nothing was
+  attached to a terminal. Each attempt went to the log file only, and the
+  in-place "⋯ attempt n/m" line is a no-op without a TTY — so a `destroy`
+  watched from the web UI, or any redirected run, sat silent for the six
+  minutes it polls the router ELB and potentially twenty more on its ENIs,
+  looking hung while working normally. Piped runs now get one line per
+  attempt; terminals and the log file are unchanged.
+
+- `cost` priced Spot instances at their on-demand rate. Measured on 2026-08-03
+  against a live minimal-profile cluster, it reported **$0.9213/h** against a
+  real **$0.8269/h** — inflated by **11.4%**, and inflated specifically in the
+  direction that makes running on Spot look less worthwhile than it is.
+
+  It now reads each instance's lifecycle — which `ec2_instance_info` already
+  returns — and looks up the current Spot price for the types actually running
+  as Spot. Those prices are deliberately **not** cached, unlike the on-demand
+  ones: on-demand pricing changes a few times a year, Spot pricing moves by the
+  hour and by availability zone, so a cached Spot price would be exactly as
+  wrong as the on-demand figure it replaces, just less obviously. When a Spot
+  price can't be fetched the instance falls back to on-demand and the report
+  says which types that happened to, so the number is over-stated rather than
+  quietly optimistic.
+
+  The compute line splits into on-demand and Spot only when something is
+  actually on Spot, and the report's closing note now says which basis was
+  used — a Spot figure is a snapshot of a price that moves, and presenting it
+  as if it were a rate would be its own kind of wrong.
+
+- The orphaned `k8s-elb-*` security group could not be deleted, which stalled
+  `destroy` on the VPC for twenty minutes and then failed it — with nothing in
+  the output connecting the two, because the original single attempt swallowed
+  its own error under `ignore_errors`.
+
+  It was first treated as a timing problem and given retries. That made the
+  failure visible, which was worth doing, but it could never have fixed it:
+  measured on 2026-08-03, **zero** network interfaces were using the group and
+  eleven minutes of retrying changed nothing. AWS reports
+  `DependencyViolation: has a dependent object` for a security group that
+  another group's *rules* reference, and the ingress-operator adds exactly such
+  a rule to the node security groups so the router ELB can reach the nodes.
+  That reference only clears when Terraform deletes the node groups — which
+  happens *after* the cleanup task, so no retry budget could have succeeded.
+
+  `teardown` now revokes the referencing rules before deleting the group, which
+  is safe because those node groups are seconds from being destroyed anyway.
+  The remaining short retry is a safety net for a genuine ENI attachment, and
+  its warning says so, to send the next person looking at interfaces rather
+  than back at the rules.
+
+- Closing the terminal killed a running `deploy`. The stdout callback wrote to
+  `sys.stdout` unguarded, so once the terminal window was gone the first task
+  to complete raised and took the whole playbook down — silently, mid-install,
+  leaving the bootstrap running and billing and its CSRs unapproved. Every
+  terminal write is now guarded, and the log is written *before* stdout rather
+  than after: the on-disk record is the durable half, the live view is the
+  disposable one. Losing a window now costs the view and nothing else.
+- `destroy` could fail with `DependencyViolation` on the internet gateway
+  because the ingress router's ELB came back after being deleted. Deleting the
+  default `IngressController` doesn't remove it — the cluster-ingress-operator
+  reconciles it straight back, along with a new Classic ELB, and that ELB's
+  ENIs hold the public subnet. Seen on 2026-08-03: deleted at 10:48:43, the
+  ELB poll correctly saw zero at 10:48:48, and a replacement appeared at
+  10:50:08, blocking the teardown until terraform gave up 20 minutes later.
+
+  Earlier teardowns had won that race against the masters being terminated
+  rather than avoided it. `teardown` now scales `cluster-version-operator` and
+  then `ingress-operator` to zero before deleting anything — the CVO first, or
+  it scales the other back up — and re-checks afterwards instead of trusting
+  that "zero now" means "zero from here on". Not version-specific.
+
 
 - `deploy` reported a healthy cluster as a failed deploy when the bootstrap
   took longer than `openshift-install`'s internal ~20-minute wait for the

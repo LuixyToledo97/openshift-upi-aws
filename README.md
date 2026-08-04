@@ -255,7 +255,7 @@ same as everything that has been *tried*. This table is the honest answer:
 | Version | Status | Last verified | Notes |
 |---|---|---|---|
 | **4.22.6** | ✅ Verified | 2026-08-03 | Several full cycles. One bootstrap failure that did not reproduce (see below) |
-| **4.22.7** | ✅ Verified | 2026-08-03 | Deploy, verify and `ssh` identical to 4.22.6. `destroy` needed a second run, for a bug that was not version-specific (see below) |
+| **4.22.7** | ✅ Verified | 2026-08-04 | Re-verified end to end, this time driven entirely from the web UI: deploy, `verify` at 5/5 Ready and 27 healthy ClusterOperators, `cost`, and a `destroy` that completed in 12m10s leaving nothing behind. The earlier run needed a second `destroy`, for a bug that was not version-specific and is now fixed |
 | Anything else | ⚪ Untested | — | Nothing prevents it, nothing confirms it |
 
 **"Verified" means a real end-to-end run against AWS**: `deploy` →
@@ -1937,13 +1937,11 @@ planned — a good starting point if you're looking for something to pick up.
 
 ☁️ **Role:** Cloud Native Engineer
 
-📍 **Location:** Consuegra (Spain)
-
 🐙 **GitHub:** [@LuixyToledo97](https://github.com/LuixyToledo97)
 
-📧 **Email:** [luisgarciavalle97@outlook.es](mailto:luisgarciavalle97@outlook.es)
-
 💼 **LinkedIn:** [lgv-rhca](https://www.linkedin.com/in/lgv-rhca/)
+
+✍️ **Medium:** [@luixytoledo97](https://luixytoledo97.medium.com/)
 
 ---
 
