@@ -440,7 +440,21 @@ class CallbackModule(CallbackBase):
         attempt = res.get("attempts", 0)
         retries = res.get("retries", 0)
         name = self._pending or self._task_name(result._task)
-        self._log(f"    retry {attempt}/{retries - 1 if retries else '?'}: {name}")
+        line = f"    retry {attempt}/{retries - 1 if retries else '?'}: {name}"
+
+        if self._interactive:
+            # A terminal gets the in-place "⋯ attempt n/m" line below, so the
+            # log is the only other place this needs to go.
+            self._log(line)
+        else:
+            # Piped — the web UI, or a redirected run. `_show_running` is a
+            # no-op without a terminal, so this was the *only* signal, and it
+            # went to the file alone: `destroy` spent six minutes waiting for
+            # the router ELB and twenty more for its ENIs looking, from the
+            # outside, completely hung. One line per attempt is the right
+            # equivalent of the rewrite a terminal gets.
+            self._emit(line)
+
         self._show_running(f"{name}  [attempt {attempt}/{retries - 1 if retries else '?'}]")
 
     # -- loops -------------------------------------------------------------
